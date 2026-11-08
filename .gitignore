@@ -1,0 +1,19 @@
+# Game material and everything made from it stays out of the repository.
+*.iso
+*.ISO
+*.bin
+*.elf
+*.irx
+*.IRX
+*.wav
+*.raw
+toolchain/
+marz/iso/
+marz/iso_jp/
+marz/build/
+marz/build_us/
+marz/logs/
+marz/logs_us/
+external/gitaroo-man-native/external/PS2Recomp/ps2xRuntime/src/lib/vu/generated/
+SLPM_*
+SLUS_*

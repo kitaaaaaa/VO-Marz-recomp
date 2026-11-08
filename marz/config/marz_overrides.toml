@@ -1,0 +1,52 @@
+# Same compiler family as Gitaroo Man Native, so its reasons carry over until Marz shows otherwise:
+# these names have runtime handlers whose conventions differ from the game's own library code.
+native = [
+  # Marz has the soft-double helpers (dptofp, fptodp, dpadd...), so these take doubles in a0/v0
+  # while the runtime's handlers of the same names use single floats in f12/f0.
+  "ceil",
+  "cos",
+  "fabs",
+  "floor",
+  "log",
+  "pow",
+  "sqrt",
+  "__ieee754_rem_pio2f",
+  "__kernel_cosf",
+  "__kernel_sinf",
+  "rand",
+  "sprintf",
+  "vsprintf",
+  # Native sprintf/vsprintf call this with a string FILE on the stack, which the runtime's handler rejects.
+  "vfprintf",
+  "sceGifPkCloseGifTag",
+  "sceGifPkAddGsAD",
+  "sceGifPkOpenGifTag",
+  "sceVif1PkInit",
+  "sceVif1PkReset",
+  "sceVif1PkTerminate",
+  "sceVif1PkCnt",
+  "sceVif1PkRef",
+  "sceVif1PkEnd",
+  "sceVif1PkReserve",
+  "sceVif1PkOpenDirectCode",
+  "sceVif1PkCloseDirectCode",
+  "sceVif1PkOpenGifTag",
+  "sceVif1PkCloseGifTag",
+  "sceVif1PkAlign",
+  "sceVif1PkAddGsAD",
+  # No runtime implementation; the original code writes the channel registers, which the memory
+  # system handles for the scratchpad channels Sofdec uses (MWSPR_SaveSprMem).
+  "sceDmaRecv",
+  "sceDmaRecvN",
+  "sceSdRemoteInit",
+  "sceSdRemote",
+  "sceSdTransToIOP",
+  # The game asks for a clear on every buffer swap and patches the clear block in sceGsDBuff itself. The
+  # runtime's handlers leave that block empty and send only the draw environment, so nothing is ever
+  # cleared. The originals fill it in and send all 14 register pairs through sceGsPutDrawEnv.
+  "sceGsSetDefClear",
+  "sceGsSetDefDBuff",
+  "sceGsSetDefDispEnv",
+  "sceGsSetDefDrawEnv",
+  "sceGsSwapDBuff",
+]

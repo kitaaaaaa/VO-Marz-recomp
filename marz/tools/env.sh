@@ -18,5 +18,6 @@ export APPDATA="$(cygpath -w "$GHIDRA_HOME/roaming")"
 export TEMP="$(cygpath -w "$GHIDRA_HOME/tmp")"
 export TMP="$TEMP"
 export ISO_IMAGE="$MARZ_TOP/Dennou Senki Virtual-On Marz (Japan).iso"
-export ELF="$MARZ/iso_jp/SLPM_653.03"
+# MARZ_GAME_DIR: the extracted disc folder to boot (default iso_jp; the English build uses a patched copy).
+export ELF="${MARZ_GAME_DIR:-$MARZ/iso_jp}/SLPM_653.03"
 mkdir -p "$MARZ/build" "$MARZ/logs"

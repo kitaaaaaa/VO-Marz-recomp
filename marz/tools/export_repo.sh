@@ -9,7 +9,8 @@ DEST="$1"
 [ -d "$DEST/.git" ] || { echo "not a git checkout: $DEST" >&2; exit 1; }
 copy() { mkdir -p "$DEST/$(dirname "$1")"; cp "$TOP/$1" "$DEST/$1"; }
 
-for f in marz/src/*.cpp marz/tools/*.sh marz/tools/*.py marz/config/*.toml marz/config_us/*.txt; do
+for f in marz/src/*.cpp marz/tools/*.sh marz/tools/*.py marz/config/*.toml marz/config_us/*.txt \
+         marz/translation/*.md marz/translation/en/*.json; do
     copy "${f#$TOP/}"
 done
 BASE=external/gitaroo-man-native

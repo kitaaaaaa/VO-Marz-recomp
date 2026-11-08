@@ -28,7 +28,7 @@ class GSGpuRenderer;
 // memory without one of those calls.
 //
 //   (default; PS2X_GS_BACKEND=cpu selects the CPU rasterizer instead)
-//   PS2X_GS_SCALE=N          internal resolution (default 2)
+//   --scale N / PS2X_GS_SCALE=N  internal resolution (default 2; 1 under PS2X_GS_GPU_VERIFY)
 //   PS2X_GS_GPU_VERIFY=1     also run the CPU rasterizer on a copy of GS memory and compare every
 //                            presented frame (stats on stderr, diff images into PS2X_DUMP_FRAMES)
 class GSGpuBackend final : public GSRasterBackend

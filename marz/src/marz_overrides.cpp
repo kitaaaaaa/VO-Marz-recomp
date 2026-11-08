@@ -167,9 +167,8 @@ namespace
         }
     }
 
-    // Movies can freeze the game, so for now they are skipped: on the first frame ADV_Movie advances the
-    // game state (gp-0x7788) as it does when a movie ends, and ADV_ExitMovie then runs as usual.
-    // PS2X_PLAY_MOVIES=1 plays them.
+    // --skip-intro on the runner's command line (for testing) skips the movies: on the first frame ADV_Movie
+    // advances the game state (gp-0x7788) as it does when a movie ends, and ADV_ExitMovie then runs as usual.
     void skipMovie(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         (void)runtime;
@@ -182,7 +181,7 @@ namespace
 
     void applyMarzOverrides(PS2Runtime &runtime)
     {
-        if (std::getenv("PS2X_PLAY_MOVIES") == nullptr)
+        if (ps2_game_overrides::hasCommandLineOption("--skip-intro"))
             runtime.replaceFunction(0x00512B80u, &skipMovie);
         runtime.replaceFunction(0x00504968u, &sofdec::addDma);
         runtime.replaceFunction(0x00504C68u, &sofdec::noDma);

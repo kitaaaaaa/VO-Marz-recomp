@@ -1,4 +1,5 @@
 #include "ps2_runtime.h"
+#include "game_overrides.h"
 #include "games_database.h"
 #if defined(PS2X_ENABLE_DEBUG_UI) && !defined(PLATFORM_VITA)
 #include "ps2_debug_panel.h"
@@ -174,6 +175,7 @@ int main(int argc, char *argv[])
     try
     {
         std::filesystem::path pathObj = getExecutablePath(argc, argv);
+        ps2_game_overrides::setCommandLineOptions(argc, argv);
 
         std::string filePathStr = pathObj.string();
         std::string elfName = pathObj.filename().string();

@@ -821,9 +821,11 @@ namespace ps2_stubs
                             entries.push_back(tableEntry);
                         }
 
+                        // A negative maxent asks only how many entries match (Virtual-On Marz checks for its save
+                        // with maxent -1 and no table, and treats a positive count as "found").
                         const size_t entryCount =
-                            std::min(entries.size(), maxEntries > 0 ? static_cast<size_t>(maxEntries) : 0u);
-                        if (entryCount == 0u || tableAddr == 0u)
+                            maxEntries < 0 ? entries.size() : std::min(entries.size(), static_cast<size_t>(maxEntries));
+                        if (entryCount == 0u || tableAddr == 0u || maxEntries < 0)
                         {
                             result = static_cast<int32_t>(entryCount);
                         }

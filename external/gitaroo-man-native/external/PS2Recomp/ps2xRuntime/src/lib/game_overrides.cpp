@@ -89,6 +89,44 @@ namespace
 }
 namespace ps2_game_overrides
 {
+    namespace
+    {
+        std::vector<std::string> &commandLineOptions()
+        {
+            static std::vector<std::string> options;
+            return options;
+        }
+    }
+
+    void setCommandLineOptions(int argc, char *argv[])
+    {
+        // argv[0] is the runner and argv[1] the guest ELF.
+        commandLineOptions().clear();
+        for (int i = 2; i < argc; ++i)
+            if (argv[i])
+                commandLineOptions().emplace_back(argv[i]);
+    }
+
+    bool hasCommandLineOption(std::string_view option)
+    {
+        const auto &options = commandLineOptions();
+        return std::find(options.begin(), options.end(), option) != options.end();
+    }
+
+    std::string commandLineValue(std::string_view option)
+    {
+        const auto &options = commandLineOptions();
+        for (size_t i = 0; i < options.size(); ++i)
+        {
+            const std::string_view arg = options[i];
+            if (arg == option && i + 1 < options.size())
+                return options[i + 1];
+            if (arg.size() > option.size() && arg.substr(0, option.size()) == option && arg[option.size()] == '=')
+                return std::string(arg.substr(option.size() + 1));
+        }
+        return {};
+    }
+
     AutoRegister::AutoRegister(const Descriptor &descriptor)
     {
         registerDescriptor(descriptor);

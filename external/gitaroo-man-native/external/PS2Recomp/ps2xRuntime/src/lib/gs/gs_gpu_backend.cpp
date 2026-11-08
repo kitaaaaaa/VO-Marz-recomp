@@ -1,5 +1,6 @@
 #include "gs_gpu_backend.h"
 #include "gs_threaded_backend.h"
+#include "game_overrides.h"
 
 #include "runtime/gs/ps2_gs_common.h"
 #include "runtime/gs/ps2_gs_memory.h"
@@ -572,11 +573,20 @@ public:
     explicit GSGpuRenderer(GSCpuBackend &cpu) : m_cpu(cpu)
     {
         m_mirrorVersion.fill(~0ull);
-        // 1x by default: two-circuit displays present through the CPU path at 1x anyway, so a higher
-        // scale only adds host load, which stalls the game thread and with it the audio.
-        m_scale = 1;
-        if (const char *v = std::getenv("PS2X_GS_SCALE"))
-            m_scale = static_cast<uint32_t>(std::clamp(std::atoi(v), 1, 8));
+        // Internal resolution: the runner's "--scale N", else PS2X_GS_SCALE, else 2x (1x under
+        // PS2X_GS_GPU_VERIFY, whose CPU reference only matches 1x output). Two-circuit displays still
+        // present through the CPU path at 1x.
+        std::string scale = ps2_game_overrides::commandLineValue("--scale");
+        if (scale.empty())
+            if (const char *v = std::getenv("PS2X_GS_SCALE"))
+                scale = v;
+        if (!scale.empty())
+            m_scale = static_cast<uint32_t>(std::clamp(std::atoi(scale.c_str()), 1, 8));
+        else
+        {
+            const char *verify = std::getenv("PS2X_GS_GPU_VERIFY");
+            m_scale = verify && *verify && std::strcmp(verify, "0") != 0 ? 1u : 2u;
+        }
     }
     uint32_t Scale() const { return m_scale; }
     ~GSGpuRenderer() { Release(); }
@@ -1053,7 +1063,7 @@ void GSGpuRenderer::EnsureGl()
     glActiveTexture(GL_TEXTURE0);
     m_mirrorVersion.fill(~0ull);
     m_mirrorDirty = true;
-    std::cerr << "[gs-gpu] internal resolution x" << m_scale << " (PS2X_GS_SCALE)" << std::endl;
+    std::cerr << "[gs-gpu] internal resolution x" << m_scale << " (--scale, PS2X_GS_SCALE)" << std::endl;
     std::cerr << "[gs-gpu] OpenGL renderer: " << reinterpret_cast<const char *>(glGetString(GL_RENDERER)) << std::endl;
 }
 

@@ -32,6 +32,12 @@ namespace ps2_game_overrides
     // Runtime helper for game-specific modules:
     // bind an address to an existing syscall/stub handler by name.
     bool bindAddressHandler(PS2Runtime &runtime, uint32_t address, std::string_view handlerName);
+
+    // The runner's command-line options after the ELF path (e.g. "--skip-intro"), for game modules.
+    void setCommandLineOptions(int argc, char *argv[]);
+    bool hasCommandLineOption(std::string_view option);
+    // The value given as "--name value" or "--name=value" (empty if the option is absent).
+    std::string commandLineValue(std::string_view option);
 }
 
 #define PS2_GAME_OVERRIDE_JOIN2(a, b) a##b

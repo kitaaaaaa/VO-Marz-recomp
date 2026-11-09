@@ -37,6 +37,10 @@ namespace ps2x::iop::detail
         uint32_t option = 0;
         uint32_t attr = 0;
         uint64_t wakeCycle = 0;
+        // Place in its priority's ready queue (lower runs first): threads that become ready join the back, a
+        // running thread that loses the CPU without blocking goes back to the front (threadman's
+        // readyq_insert_back / readyq_insert_front).
+        int64_t readyOrder = 0;
         int waitId = 0;
         uint32_t waitBits = 0;
         uint32_t waitMode = 0;
@@ -111,6 +115,11 @@ namespace ps2x::iop::detail
         void wakeOneSemaphore(int id);
         [[nodiscard]] static bool eventSatisfied(const EventFlag &event, uint32_t bits, uint32_t mode);
         void wakeEventWaiters(EventFlag &event);
+        void makeReady(IopThread &thread) noexcept
+        {
+            thread.state = IopThreadState::Ready;
+            thread.readyOrder = ++m_readyBack;
+        }
 
         IopMemory &m_memory;
         std::map<int, IopThread> m_threads;
@@ -121,5 +130,7 @@ namespace ps2x::iop::detail
         uint32_t m_nextEventFlagId = 1;
         IopThread *m_currentThread = nullptr;
         NestedWaitFn m_nestedWait;
+        int64_t m_readyBack = 0;
+        int64_t m_readyFront = 0;
     };
 }

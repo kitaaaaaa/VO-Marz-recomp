@@ -4,6 +4,7 @@
 #include "../iop_emulator_const.h"
 
 #include <algorithm>
+#include <cstdlib>
 
 namespace ps2x::iop::detail
 {
@@ -98,7 +99,7 @@ namespace ps2x::iop::detail
             thread.cpu.gpr[28] = cpu.gpr[28];
             thread.cpu.gpr[29] = alignUp(thread.stackBase + thread.stackSize, 16u) - 16u;
             thread.cpu.gpr[31] = kThreadReturnSentinel;
-            thread.state = IopThreadState::Ready;
+            makeReady(thread);
             setV0(0);
             return true;
         }
@@ -172,7 +173,7 @@ namespace ps2x::iop::detail
                 it->second.state == IopThreadState::Semaphore ||
                 it->second.state == IopThreadState::EventFlag)
             {
-                it->second.state = IopThreadState::Ready;
+                makeReady(it->second);
             }
             setV0(0);
             return true;
@@ -208,7 +209,7 @@ namespace ps2x::iop::detail
                 return true;
             }
             if (it->second.state == IopThreadState::Sleep)
-                it->second.state = IopThreadState::Ready;
+                makeReady(it->second);
             else
                 ++it->second.wakeupCount;
             setV0(0);
@@ -256,7 +257,7 @@ namespace ps2x::iop::detail
                 return true;
             }
             if (it->second.state == IopThreadState::Suspended)
-                it->second.state = IopThreadState::Ready;
+                makeReady(it->second);
             setV0(0);
             return true;
         }
@@ -492,7 +493,7 @@ namespace ps2x::iop::detail
         if (best != nullptr && semaphore != m_semaphores.end() && semaphore->second.current > 0)
         {
             --semaphore->second.current;
-            best->state = IopThreadState::Ready;
+            makeReady(*best);
             best->waitId = 0;
         }
     }
@@ -518,7 +519,7 @@ namespace ps2x::iop::detail
             thread.cpu.gpr[2] = 0u;
             if ((thread.waitMode & 0x10u) != 0u)
                 event.bits = 0u;
-            thread.state = IopThreadState::Ready;
+            makeReady(thread);
             thread.waitId = 0;
             thread.waitBits = 0;
             thread.waitMode = 0;
@@ -579,7 +580,7 @@ namespace ps2x::iop::detail
             {
                 if (thread.state == IopThreadState::EventFlag && thread.waitId == id)
                 {
-                    thread.state = IopThreadState::Ready;
+                    makeReady(thread);
                     thread.waitId = 0;
                     thread.cpu.gpr[2] = static_cast<uint32_t>(-1);
                 }
@@ -708,16 +709,19 @@ namespace ps2x::iop::detail
         for (auto &[id, thread] : m_threads)
         {
             if (thread.state == IopThreadState::Delay && thread.wakeCycle <= currentCycle)
-                thread.state = IopThreadState::Ready;
+                makeReady(thread);
         }
 
+        // Equal priorities run in ready-queue order; PS2X_IOP_PREEMPT_LOCKED=1 restores the old lowest-id choice.
+        static const bool s_oldScheduling = std::getenv("PS2X_IOP_PREEMPT_LOCKED") != nullptr;
         IopThread *next = nullptr;
         for (auto &[id, thread] : m_threads)
         {
             if (thread.state != IopThreadState::Ready)
                 continue;
             if (next == nullptr || thread.priority < next->priority ||
-                (thread.priority == next->priority && thread.id < next->id))
+                (thread.priority == next->priority &&
+                 (s_oldScheduling ? thread.id < next->id : thread.readyOrder < next->readyOrder)))
                 next = &thread;
         }
         if (next == nullptr)
@@ -778,7 +782,18 @@ namespace ps2x::iop::detail
         if (thread.cpu.pc == returnSentinel || thread.cpu.stopped)
             thread.state = IopThreadState::Dormant;
         else if (thread.state == IopThreadState::Running)
-            thread.state = IopThreadState::Ready;
+        {
+            // IOP threads are not preempted by time: one whose slice ended was still running, and if another
+            // thread takes the CPU now it was preempted, which puts it back at the front of its ready queue.
+            // RotateThreadReadyQueue (cpu.yielded with the thread still running) sends it to the back.
+            if (thread.cpu.yielded)
+                makeReady(thread);
+            else
+            {
+                thread.state = IopThreadState::Ready;
+                thread.readyOrder = --m_readyFront;
+            }
+        }
         m_currentThread = nullptr;
         cleanupDeadThreads();
     }

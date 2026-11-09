@@ -120,10 +120,12 @@ namespace ps2recomp
             return fmt::format("SET_GPR_U64(ctx, {}, ((int64_t)GPR_S64(ctx, {}) < (int64_t)GPR_S64(ctx, {})) ? 1 : 0);", inst.rd, inst.rs, inst.rt);
         case SPECIAL_SLTU:
             return fmt::format("SET_GPR_U64(ctx, {}, ((uint64_t)GPR_U64(ctx, {}) < (uint64_t)GPR_U64(ctx, {})) ? 1 : 0);", inst.rd, inst.rs, inst.rt);
+        // MOVZ/MOVN copy only the low 64 bits; rd keeps its upper 64 (games build vectors this way, e.g. Ninja's
+        // njOuterProduct moves x,y under a z that QFSRV put in the upper half).
         case SPECIAL_MOVZ:
-            return fmt::format("if (GPR_U64(ctx, {}) == 0) SET_GPR_VEC(ctx, {}, GPR_VEC(ctx, {}));", inst.rt, inst.rd, inst.rs);
+            return fmt::format("if (GPR_U64(ctx, {}) == 0) Ps2SetGprLow64(ctx, {}, GPR_VEC(ctx, {}));", inst.rt, inst.rd, inst.rs);
         case SPECIAL_MOVN:
-            return fmt::format("if (GPR_U64(ctx, {}) != 0) SET_GPR_VEC(ctx, {}, GPR_VEC(ctx, {}));", inst.rt, inst.rd, inst.rs);
+            return fmt::format("if (GPR_U64(ctx, {}) != 0) Ps2SetGprLow64(ctx, {}, GPR_VEC(ctx, {}));", inst.rt, inst.rd, inst.rs);
         case SPECIAL_MFSA:
             return fmt::format("SET_GPR_U32(ctx, {}, ctx->sa);", inst.rd);
         case SPECIAL_MTSA:

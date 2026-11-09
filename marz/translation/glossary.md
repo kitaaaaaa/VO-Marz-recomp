@@ -24,7 +24,8 @@ forces economy, choose tighter English wording, never drop content.
   Keep the placeholder text ○○ wherever the Japanese has it (the game may put a name or number there).
   Keep full-width zero placeholders like ０００ or ００ exactly as they are (same characters), since the game may
   write digits into them.
-  Trailing box characters such as │ or ┐ at the end of a title must be kept at the end.
+  │ (SJIS 84A0) and ┐ (84A2) are not box characters: the game's table maps them to font glyphs Ⅱ and Ⅳ.
+  ┐ after アンベル is written "Amber IV"; │ (747H│, Viper│) is still kept as the game's Ⅱ glyph.
 - Numbers: write as ASCII digits. Years: 電脳暦ＶＣａ９年 -> "Virtual Century VCa9" first time on a page, "VCa9"
   after; ＶＣ８４年 -> "VC84".
 - Keep identical Japanese lines translated identically.
@@ -48,7 +49,7 @@ forces economy, choose tighter English wording, never drop content.
 バーチャロイド Virtuaroid | ＶＲ VR (plural VRs)
 ＭＡＲＺ MARZ | ＭＡＲＺ司令部 MARZ Command | 火星 Mars | 火星戦線 the Mars Front | 赤道戦区 Equatorial Sector
 ＤＮＡ DNA | ＲＮＡ RNA | ＤＮ社 DN Corporation (DN Corp.) | プラント plant (the eight great plants, 第８プラント 8th Plant)
-フレッシュ・リフォー Fresh Lifo | トリストラム・リフォー Tristram Lifo | ゼロプラント Zero Plant
+フレッシュ・リフォー Flesh Rifaux | トリストラム・リフォー Tristram Rifaux | ゼロプラント Zero Plant | ０プラント 0 Plant
 ハッター軍曹 Sergeant Hatter (Sgt. Hatter) | アファームド・ザ・ハッター Apharmd the Hatter
 ダイモン Daimon | ダイモン・フラグメント Daimon Fragment | ダイモン・ストゥーパ Daimon Stupa
 タングラム Tangram | オラトリオ・タングラム Oratorio Tangram | ゲート・オブ・タングラム Gate of Tangram
@@ -59,15 +60,15 @@ forces economy, choose tighter English wording, never drop content.
 バーチャロン現象 the Virtualon Phenomenon | バーチャロン・ポジティブ Virtualon Positive | バーチャロン・フォース Virtualon Force
 リバース・コンバート reverse conversion | 定位リバース・コンバート localized reverse conversion
 電脳虚数空間（ＣＩＳ） Cyber Imaginary Space (CIS) | 禁制領域 the Forbidden Zone | シバルバー Xibalba
-アンベル Ambel | 打撃艦隊「フォース」 the strike fleet "Force" | 白虹騎士団 the White Rainbow Knights
+アンベル Amber | 打撃艦隊「フォース」 the strike fleet "Force" | 白虹騎士団 the White Rainbow Knights
 リリン・プラジナー Lilin Plajiner | 薔薇の三姉妹 the Rose Sisters | 毒蛇三姉妹 the Viper Sisters
-アジム Ajim | ゲラン Gelan | 戦闘結晶体 combat crystal | 戦闘結晶構造体 combat crystal construct
-シャドウ Shadow (汚染率 contamination rate) | ヤガランデ Yagarande | 幻獣 phantom beast | 幻獣戦機 phantom beast war machine
+アジム Ajim | ゲラン Guerlain | 戦闘結晶体 combat crystal | 戦闘結晶構造体 combat crystal construct
+シャドウ Shadow (汚染率 contamination rate) | ヤガランデ Jaguarandi | 幻獣 phantom beast | 幻獣戦機 phantom beast war machine
 第七パラダイム the Seventh Paradigm | 事象崩壊要塞 the Event Collapse Fortress
 Robots: テムジン Temjin | ライデン Raiden | アファームド Apharmd | ＶＯＸ VOX (ダン Dan, ジョー Joe, ジェーン Jane,
-ボブ Bob, リー Lee, ルー Loo) | マイザー Myzr (マイザー・デルタ Myzr Delta) | バル・ディ・メオラ Bal Di Meora
+ボブ Bob, リー Lee, ルー Lou) | マイザー Myzr (マイザー・デルタ Myzr Delta) | バル・ディ・メオラ Bal d Meora
 フェイイェン / フェイ・イェン Fei-Yen | ビビッド・ハート Vivid Heart | スペシネフ Specineff | エンジェラン Angelan
-ガラヤカ Galayaca | スライプナー Sleipnir | アダックス Adax | ドルカス Dorkas | ベルグドル Belgdor | タングラム Tangram
+ガラヤカ Galayaca | スライプナー Sleipnir | アダックス Addax | ドルカス Dorkas | ベルグドル Belgdor | タングラム Tangram
 Model codes: write the Latin form, e.g. テムジン７４７Ｊ Temjin 747J, ＭＺＶ－７４７－Ｊ MZV-747-J.
 Weapons: translate katakana weapon names to their English (e.g. ショルダー・ボックス・ランチャー Shoulder Box Launcher,
 エジェクタブル・クロー・ランチャー Ejectable Claw Launcher). ＬＷ/ＲＷ/ＣＷ -> LW/RW/CW.
@@ -79,9 +80,9 @@ elevated diction and precise technical vocabulary. Never flatten it into plain, 
 Business entities are "Corporation": 国際戦争公司 the International War Corporation; ＤＮ社 DN Corporation (spell out
 "DN Corporation" wherever the byte limit allows; "DN Corp." only where it cannot fit); 〜社 X Corporation.
 ＤＮ社最高幹部会 the DN Corporation Supreme Executive Board.
-ガラヤカ Guarayakha (the game's own spelling) | 化鳥 "Monstrous Bird" | アンベル┐ Ambel┐ (keep ┐) | アンベル様 Lord Ambel
-ゼロプラント / ０プラント Zero Plant | アイザーマン博士 Dr. Eisermann | ムーニー・バレー Moony Valley
+ガラヤカ Guarayakha (the game's own spelling) | 化鳥 "Kaichou" | アンベル┐ Amber IV | アンベル様 Lord Amber
+ゼロプラント Zero Plant, ０プラント 0 Plant | アイザーマン博士 Dr. Yzrman | ムーニー・バレー Moony Valley
 火星極冠戦域 the Mars Polar Cap Theater (戦域 = theater, 戦区 = sector) | 白騎士 the White Knight | 白虹の騎士 White Rainbow Knight
-白檀艦隊（ホワイト・フリート） the Sandalwood Fleet (the White Fleet) | クライグスター Kriegster | アイデルスター Idelstar
+白檀艦隊（ホワイト・フリート） the Sandalwood Fleet (the White Fleet) | クライグスター Kriegstar | アイデルスター Idelstar
 マシュー大佐 Colonel Matthew | ＯＭＧ Operation Moon Gate (OMG) | クリアリア・バイアステン Clearia Biasten
 Mission screens: 成功条件 "Objective:", 制限時間 "Time Limit   :", 総敵数 "Total Enemies:".

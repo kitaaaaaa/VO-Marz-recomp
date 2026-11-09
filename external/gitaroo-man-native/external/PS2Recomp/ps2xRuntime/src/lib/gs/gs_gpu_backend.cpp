@@ -2803,14 +2803,14 @@ void GSGpuBackend::RunOnHost(const std::function<void()> &fn) const
     }
     static const bool s_traceStalls = envFlag("PS2X_TRACE_STALLS");
     const auto waitStart = std::chrono::steady_clock::now();
+    Command command;
+    command.type = CommandType::Call;
+    command.extra = NewExtra(); // takes m_mutex itself, so before the lock below
+    command.extra->call = fn;
     std::unique_lock<std::mutex> lock(m_mutex);
     if (m_stopped)
         return;
     FlushGuestBatchLocked();
-    Command command;
-    command.type = CommandType::Call;
-    command.extra = NewExtra();
-    command.extra->call = fn;
     self->m_pending.push_back(std::move(command));
     const uint64_t target = ++self->m_queued;
     self->PublishLocked();

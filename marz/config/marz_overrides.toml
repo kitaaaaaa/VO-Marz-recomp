@@ -50,3 +50,13 @@ native = [
   "sceGsSetDefDrawEnv",
   "sceGsSwapDBuff",
 ]
+
+# Instruction words the recompiler substitutes.
+[patches]
+instructions = [
+  # MakeButton: human players' input goes through a 4-slot FIFO (3 frames late) unless VersusMode
+  # (gp-0x71A8) is set, which the game never does. Read the skip flag from an unused .sbss word instead
+  # (gp-0x789C = 0x6C8BD4, alignment padding nothing refers to): 0 keeps the FIFO, and
+  # PS2X_MARZ_QUICK_HANDLING=1 sets it (src/marz_overrides.cpp). Was 0x8F848E58 lw a0,-0x71A8(gp).
+  { address = "0x221558", value = "0x8F848764" },
+]

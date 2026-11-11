@@ -975,9 +975,10 @@ bool ps2DeferUntilVif1ChainDone(std::function<void()> fn);
 // Called before m_stateMutex: the GS thread needs that lock to finish the chain. `what` names the caller.
 static void waitForVif1ChainFromEe(const char *what)
 {
-    (void)what;
+    extern const char *g_traceVif1WaitWhat;
     if (!ps2Vif1ChainInFlight() || ps2OnVif1Thread() || ps2OnGsPacketThread())
         return;
+    g_traceVif1WaitWhat = what;
     ps2WaitForVif1Chain();
 }
 

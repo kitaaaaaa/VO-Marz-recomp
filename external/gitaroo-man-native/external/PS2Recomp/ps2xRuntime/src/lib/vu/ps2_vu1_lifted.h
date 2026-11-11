@@ -110,6 +110,14 @@ struct VU1Lifted
     static void fmacStore(VU1Interpreter &vu, uint32_t word, float *result, float *dst, const float (*lvf)[4], const float *lacc);
     static void fmacStoreSlow(VU1Interpreter &vu, uint32_t word, float *result, float *dst, const float (*lvf)[4], const float *lacc,
                               uint8_t dest, bool flags);
+    // updateFmacFlags for lanes that are all plainly normal or zero (laneFlags only Z/S), inline.
+    template <uint8_t Dest>
+    static void queueFlags(VU1Interpreter &vu, const uint8_t laneFlags[4]);
+    // PS2X_VU1_FLAGS_CHECK: the inline flag store against fmacStoreSlow on copies of the same state.
+    struct FlagStoreRef;
+    static void checkFlagStoreBefore(VU1Interpreter &vu, uint32_t word, const float *result, const float *dst,
+                                     const float (*lvf)[4], const float *lacc, uint8_t dest);
+    static void checkFlagStoreAfter(VU1Interpreter &vu, const float *dst);
 };
 
 #endif

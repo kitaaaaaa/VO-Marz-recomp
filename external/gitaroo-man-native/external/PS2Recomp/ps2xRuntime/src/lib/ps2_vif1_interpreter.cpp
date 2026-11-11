@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <functional>
 #include <cstdlib>
 #include <iostream>
@@ -731,7 +732,41 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
                 std::vector<uint8_t> verifyBefore, verifyPlain;
                 if (plain && s_unpackVerify)
                     verifyBefore.assign(m_vu1Data, m_vu1Data + PS2_VU1_DATA_SIZE);
-                if (plain)
+                // 32-bit V2/V3/V4 copy a fixed 8/12/16 bytes per vector (a size known only at run time made every
+                // vector a library memcpy call); V4-32 copies each run up to the 0x3FF wrap at once.
+                // PS2X_VIF_UNPACK_PERVECTOR=1 keeps the per-vector copy of the size.
+                static const bool s_unpackPerVector = std::getenv("PS2X_VIF_UNPACK_PERVECTOR") != nullptr;
+                const bool plainWords = plain && vl == 0u && components >= 2 && !s_unpackPerVector;
+                if (plainWords)
+                {
+                    uint8_t *const vuData = m_vu1Data;
+                    if (components == 4 && bytesPerVector == 16u)
+                    {
+                        for (uint32_t i = 0; i < writeVectorCount;)
+                        {
+                            const uint32_t at = (vuAddr + i) & 0x3FFu;
+                            const uint32_t run = std::min(writeVectorCount - i, 0x400u - at);
+                            std::memcpy(vuData + at * 16u, srcBase + i * 16u, run * 16u);
+                            i += run;
+                        }
+                    }
+                    else if (components == 3)
+                    {
+                        for (uint32_t i = 0; i < writeVectorCount; ++i)
+                            std::memcpy(vuData + ((vuAddr + i) & 0x3FFu) * 16u, srcBase + i * bytesPerVector, 12);
+                    }
+                    else if (components == 4)
+                    {
+                        for (uint32_t i = 0; i < writeVectorCount; ++i)
+                            std::memcpy(vuData + ((vuAddr + i) & 0x3FFu) * 16u, srcBase + i * bytesPerVector, 16);
+                    }
+                    else
+                    {
+                        for (uint32_t i = 0; i < writeVectorCount; ++i)
+                            std::memcpy(vuData + ((vuAddr + i) & 0x3FFu) * 16u, srcBase + i * bytesPerVector, 8);
+                    }
+                }
+                else if (plain)
                 {
                     uint8_t *const vuData = m_vu1Data;
                     const uint32_t comps = static_cast<uint32_t>(components);
@@ -782,13 +817,63 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
                             v[1] = v[2] = v[3] = v[0];
                         std::memcpy(dst, v, 16);
                     }
+                }
+                if (plain && s_unpackVerify)
+                {
+                    // Redo it through the general loop from the same starting memory.
+                    verifyPlain.assign(m_vu1Data, m_vu1Data + PS2_VU1_DATA_SIZE);
+                    std::memcpy(m_vu1Data, verifyBefore.data(), PS2_VU1_DATA_SIZE);
+                    plain = false;
+                }
+                // Masked, MODE 0, CL > WL = 1 (every battle mesh): the write cycle is always 0, so each field's mask
+                // action is fixed for the UNPACK and the general loop's per-field work is done once. Same writes as
+                // the general loop, which PS2X_VIF_UNPACK_VERIFY then repeats and compares.
+                if (!plain && !s_unpackGeneric && maskEnable && (vif1_regs.mode & 3u) == 0u && wl == 1u && cl > 1u && vl <= 2u)
+                {
+                    if (s_unpackVerify)
+                        verifyBefore.assign(m_vu1Data, m_vu1Data + PS2_VU1_DATA_SIZE);
+                    uint32_t spec[4];
+                    for (uint32_t f = 0; f < 4u; ++f)
+                        spec[f] = (vif1_regs.mask >> (f * 2u)) & 3u;
+                    const uint32_t comps = static_cast<uint32_t>(components);
+                    for (uint32_t i = 0; i < writeVectorCount; ++i)
+                    {
+                        uint8_t *const dst = m_vu1Data + ((vuAddr + i * cl) & 0x3FFu) * 16u;
+                        const uint8_t *const src = srcBase + i * bytesPerVector;
+                        uint32_t lanes[4], d[4];
+                        std::memcpy(lanes, dst, 16);
+                        std::memcpy(d, lanes, 16);
+                        for (uint32_t c = 0; c < comps; ++c)
+                        {
+                            if (vl == 0u)
+                                std::memcpy(&d[c], src + c * 4u, 4);
+                            else if (vl == 1u)
+                            {
+                                uint16_t raw = 0;
+                                std::memcpy(&raw, src + c * 2u, sizeof(raw));
+                                d[c] = zeroExtend ? raw : static_cast<uint32_t>(static_cast<int32_t>(static_cast<int16_t>(raw)));
+                            }
+                            else
+                                d[c] = zeroExtend ? src[c] : static_cast<uint32_t>(static_cast<int32_t>(static_cast<int8_t>(src[c])));
+                        }
+                        if (comps == 1u)
+                            d[1] = d[2] = d[3] = d[0];
+                        for (uint32_t f = 0; f < 4u; ++f)
+                            if (spec[f] == 0u)
+                                lanes[f] = d[f];
+                            else if (spec[f] == 1u)
+                                lanes[f] = vif1_regs.row[f];
+                            else if (spec[f] == 2u)
+                                lanes[f] = vif1_regs.col[0];
+                        std::memcpy(dst, lanes, 16);
+                    }
                     if (s_unpackVerify)
                     {
-                        // Redo it through the general loop from the same starting memory.
                         verifyPlain.assign(m_vu1Data, m_vu1Data + PS2_VU1_DATA_SIZE);
                         std::memcpy(m_vu1Data, verifyBefore.data(), PS2_VU1_DATA_SIZE);
-                        plain = false;
                     }
+                    else
+                        plain = true; // skips the general loop
                 }
                 // Without masking every spec reads 0, so the mask can be shifted without a branch; the
                 // write cycle position is counted (no divides).

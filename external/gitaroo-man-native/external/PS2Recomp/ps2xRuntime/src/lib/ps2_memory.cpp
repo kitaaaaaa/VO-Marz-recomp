@@ -261,8 +261,26 @@ PS2Memory::PS2Memory()
 // VIF1, VU1, GIF or GS, and completes the channel once it sees the chain has finished.
 std::function<void()> g_vif1DoneCallback;
 std::function<void()> g_vif1AfterRunCallback; // Waits for the GS thread to finish the chain's packets.
+// PS2X_TRACE_VBLANK (EeScheduler.cpp): nanoseconds other threads spent waiting for a running VIF1 chain, and the
+// chain thread spent running chains (VIF1/VU1) and then waiting for the GS thread to take their packets.
+std::atomic<uint64_t> g_traceVif1WaitNs{0}, g_traceVif1RunNs{0}, g_traceVif1DrainNs{0};
+// PS2X_TRACE_VBLANK: the longest EE wait for the chain since the last vblank, and what waited (a reason code, or
+// 0xFFFFFFFF with g_traceVif1WaitWhat naming a GS/stub caller). EE thread only.
+uint64_t g_traceVif1LongestWaitNs = 0;
+uint32_t g_traceVif1LongestWaitReason = 0;
+const char *g_traceVif1WaitWhat = "stub";
+const char *g_traceVif1LongestWaitWhat = "";
+// PS2X_TRACE_VBLANK: chains kicked since the last vblank, and the first/last kick (steady_clock ns). EE thread only.
+uint32_t g_traceKicks = 0;
+uint64_t g_traceFirstKickNs = 0, g_traceLastKickNs = 0;
 namespace
 {
+    uint64_t traceNow()
+    {
+        return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                         std::chrono::steady_clock::now().time_since_epoch())
+                                         .count());
+    }
     struct Vif1Worker
     {
         std::mutex mutex;
@@ -279,6 +297,9 @@ namespace
 
         void start(std::vector<uint8_t> &&data, std::function<void(const std::vector<uint8_t> &)> body)
         {
+            g_traceLastKickNs = traceNow();
+            if (g_traceKicks++ == 0u)
+                g_traceFirstKickNs = g_traceLastKickNs;
             std::lock_guard<std::mutex> lock(mutex);
             if (!started)
             {
@@ -310,9 +331,13 @@ namespace
                 }
                 try
                 {
+                    const uint64_t t0 = traceNow();
                     run(chain);
+                    const uint64_t t1 = traceNow();
                     if (g_vif1AfterRunCallback)
                         g_vif1AfterRunCallback();
+                    g_traceVif1RunNs.fetch_add(t1 - t0, std::memory_order_relaxed);
+                    g_traceVif1DrainNs.fetch_add(traceNow() - t1, std::memory_order_relaxed);
                 }
                 catch (const std::exception &e)
                 {
@@ -350,14 +375,23 @@ namespace
         }
 
         // The reason (which access needs the chain finished) only documents the call sites.
-        bool wait(uint32_t)
+        bool wait(uint32_t reason)
         {
             if (!inFlight.load(std::memory_order_relaxed))
                 return false;
             std::unique_lock<std::mutex> lock(mutex);
             if (std::this_thread::get_id() == thread)
                 return false;
+            const uint64_t t0 = traceNow();
             idle.wait(lock, [this]() { return finished.load(std::memory_order_relaxed); });
+            const uint64_t waited = traceNow() - t0;
+            g_traceVif1WaitNs.fetch_add(waited, std::memory_order_relaxed);
+            if (waited > g_traceVif1LongestWaitNs)
+            {
+                g_traceVif1LongestWaitNs = waited;
+                g_traceVif1LongestWaitReason = reason;
+                g_traceVif1LongestWaitWhat = "";
+            }
             inFlight.store(false, std::memory_order_relaxed);
             return true;
         }
@@ -404,7 +438,55 @@ void ps2WaitForVif1Chain()
     if (!g_vif1Worker.inFlight.load(std::memory_order_relaxed))
         return;
     std::unique_lock<std::mutex> lock(g_vif1Worker.mutex);
+    const uint64_t t0 = traceNow();
     g_vif1Worker.idle.wait(lock, []() { return g_vif1Worker.finished.load(std::memory_order_relaxed); });
+    const uint64_t waited = traceNow() - t0;
+    g_traceVif1WaitNs.fetch_add(waited, std::memory_order_relaxed);
+    if (waited > g_traceVif1LongestWaitNs)
+    {
+        g_traceVif1LongestWaitNs = waited;
+        g_traceVif1LongestWaitReason = 0xFFFFFFFFu;
+        g_traceVif1LongestWaitWhat = g_traceVif1WaitWhat;
+    }
+    g_traceVif1WaitWhat = "stub";
+}
+
+namespace
+{
+    // GS privileged writes (PMODE/DISPFB/..., not CSR) the EE makes while a chain runs: on the hardware they
+    // do not wait for the drawing, and the buffer swap (ngBeginScene's DISPFB/PMODE) should not hold the game
+    // until the last frame is drawn. They queue here, in order, and apply on the EE thread once it sees the
+    // chain finished (any VIF1 sync or poll, and each vblank before the picture is latched), so a frame is
+    // shown only when complete. EE thread only. Off by default (the wait only moved to the next GIF DMA, and
+    // Versus missed more vblanks: 11.6% vs 6.5%); PS2X_GS_SWAP_QUEUE=1 turns it on.
+    struct DeferredPrivWrite
+    {
+        uint32_t address;
+        uint64_t value;
+        bool full;
+    };
+    std::vector<DeferredPrivWrite> g_deferredPriv;
+    const bool g_swapWait = std::getenv("PS2X_GS_SWAP_QUEUE") == nullptr;
+
+    bool deferPrivWrite(uint32_t address, uint64_t value, bool full)
+    {
+        if (g_swapWait || !ps2Vif1ChainInFlight() || ps2OnVif1Thread())
+            return false;
+        g_deferredPriv.push_back({address, value, full});
+        return true;
+    }
+
+    void applyDeferredPrivWrites(GSRegisters &gs)
+    {
+        for (const DeferredPrivWrite &w : g_deferredPriv)
+            if (uint64_t *reg = gsRegPtr(gs, w.address))
+            {
+                const uint64_t mask = w.full ? ~0ull : 0xFFFFFFFFull << ((w.address & 7u) * 8u);
+                const uint64_t value = w.full ? w.value : (w.value & 0xFFFFFFFFull) << ((w.address & 7u) * 8u);
+                *reg = (*reg & ~mask) | value;
+            }
+        g_deferredPriv.clear();
+    }
 }
 
 #define PS2_VIF1_COMPLETE_CHANNEL()                  \
@@ -412,6 +494,7 @@ void ps2WaitForVif1Chain()
     {                                                \
         m_ioRegisters[0x10009020u] = 0u;             \
         completeDmacChannel(0x10009000u, 1u);        \
+        applyDeferredPrivWrites(gs_regs);            \
     } while (0)
 #define PS2_VIF1_SYNC(reason)               \
     do                                  \
@@ -936,6 +1019,8 @@ uint32_t PS2Memory::read32(uint32_t address)
             uint64_t val = gs_regs.csr.load();
             return (uint32_t)(val >> (off * 8));
         }
+        if (!g_deferredPriv.empty())
+            PS2_VIF1_SYNC(address); // a queued write must land before it is read
         uint64_t *reg = gsRegPtr(gs_regs, address);
         if (!reg)
             return 0;
@@ -982,6 +1067,8 @@ uint64_t PS2Memory::read64(uint32_t address)
         {
             return gs_regs.csr.load();
         }
+        if (!g_deferredPriv.empty())
+            PS2_VIF1_SYNC(address); // a queued write must land before it is read
         uint64_t *reg = gsRegPtr(gs_regs, address);
         return reg ? *reg : 0;
     }
@@ -1156,7 +1243,11 @@ void PS2Memory::write32(uint32_t address, uint32_t value)
     {
         // CSR is atomic, and the vsync handler writes it every frame while a chain may be running.
         if (((address - PS2_GS_PRIV_REG_BASE) & ~0x7u) != kGsCsrRegOffset)
+        {
+            if (deferPrivWrite(address, value, false))
+                return;
             PS2_VIF1_SYNC(address);
+        }
         uint32_t off = address & 7;
         const uint32_t regOff = (address - PS2_GS_PRIV_REG_BASE) & ~0x7u;
         if (regOff == kGsCsrRegOffset)
@@ -1227,7 +1318,11 @@ void PS2Memory::write64(uint32_t address, uint64_t value)
     {
         // CSR is atomic, and the vsync handler writes it every frame while a chain may be running.
         if (((address - PS2_GS_PRIV_REG_BASE) & ~0x7u) != kGsCsrRegOffset)
+        {
+            if (deferPrivWrite(address, value, true))
+                return;
             PS2_VIF1_SYNC(address);
+        }
         const uint32_t regOff = (address - PS2_GS_PRIV_REG_BASE) & ~0x7u;
         if (regOff == kGsCsrRegOffset)
         {
@@ -2221,6 +2316,12 @@ void PS2Memory::queueCompletedDmacCause(uint32_t cause)
     m_completedDmacCauses.push_back(cause);
 }
 
+void PS2Memory::pollVif1Chain()
+{
+    if (g_vif1Worker.inFlight.load(std::memory_order_relaxed))
+        PS2_VIF1_POLL();
+}
+
 std::vector<uint32_t> PS2Memory::consumeCompletedDmacCauses()
 {
     PS2_VIF1_POLL();
@@ -2271,6 +2372,14 @@ void PS2Memory::submitGifPacket(GifPathId pathId, const uint8_t *data, uint32_t 
         flushMaskedPath3Packets(false);
     }
 
+    // A packet drained at once with nothing queued goes straight through (the arbiter would copy it, then
+    // send only its bytes). PS2X_GIF_ARBITER_COPY=1 queues every packet as before.
+    static const bool s_arbiterCopy = std::getenv("PS2X_GIF_ARBITER_COPY") != nullptr;
+    if (m_gifArbiter && drainImmediately && !s_arbiterCopy && m_gifArbiter->empty())
+    {
+        m_gifArbiter->process(data, sizeBytes);
+        return;
+    }
     if (m_gifArbiter)
         m_gifArbiter->submit(pathId, data, sizeBytes, path2DirectHl);
     else if (m_gifPacketCallback)

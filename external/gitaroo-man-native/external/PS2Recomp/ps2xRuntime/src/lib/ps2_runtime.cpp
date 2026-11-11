@@ -2873,7 +2873,24 @@ void PS2Runtime::run()
                 std::cout << " [t" << thread.id << " st=" << static_cast<int>(thread.status)
                           << " w=" << static_cast<int>(thread.waitReason) << ":" << thread.waitId
                           << " pri=" << thread.currentPriority
+                          << " sus=" << thread.suspendCount << " wake=" << thread.wakeupCount
+                          << " inv=" << thread.invocationDepth
                           << " pc=0x" << std::hex << thread.pc << " ra=0x" << thread.ra << std::dec << "]";
+            }
+            // PS2X_TRACE_WORDS=addr,addr,...: guest RAM words (hex addresses) printed on the same line.
+            static const std::vector<uint32_t> s_traceWords = []
+            {
+                std::vector<uint32_t> words;
+                if (const char *list = std::getenv("PS2X_TRACE_WORDS"))
+                    for (char *end = nullptr; *list; list = *end ? end + 1 : end)
+                        words.push_back(static_cast<uint32_t>(std::strtoul(list, &end, 16)));
+                return words;
+            }();
+            for (const uint32_t addr : s_traceWords)
+            {
+                uint32_t value = 0;
+                std::memcpy(&value, m_memory.getRDRAM() + (addr & (PS2_RAM_SIZE - 1u) & ~3u), 4);
+                std::cout << " " << std::hex << addr << "=" << value << std::dec;
             }
             std::cout << std::endl;
         }

@@ -80,11 +80,88 @@ inline int16_t VU1Lifted::bv(const int32_t *vi, const VU1Interpreter &vu, const 
 
 // AC5's vu_do_xgkick: the whole packet leaves at the XGKICK. The census found no store into a kicked
 // packet before the interpreter's PATH1 transfer had copied it, so the bytes are the same.
+// progressXgkick with unlimited credit, a GIFtag at a time: each tag's data is copied at once (split where
+// VU memory wraps) instead of one qword per step. The state it leaves, the overflow reports and the
+// packet are the same. PS2X_VU1_XGKICK_PERQWORD=1 runs progressXgkick instead.
+namespace
+{
+    const bool g_xgkickPerQword = std::getenv("PS2X_VU1_XGKICK_PERQWORD") != nullptr;
+}
+
 inline void VU1Lifted::xgkick(VU1Interpreter &vu, uint32_t qwordAddress)
 {
     vu.startXgkick(qwordAddress);
     vu.m_xgkick.cycleCredit = 0xFFFFFFF0u;
-    vu.progressXgkick();
+    if (g_xgkickPerQword || !vu.m_xgkick.active || !vu.m_activeVuData || vu.m_activeVuDataSize == 0u)
+    {
+        vu.progressXgkick();
+        return;
+    }
+    VU1Interpreter::XgkickPipeline &x = vu.m_xgkick;
+    constexpr uint32_t kBuffer = VU1Interpreter::XgkickPipeline::kBufferSize;
+    const uint32_t size = vu.m_activeVuDataSize;
+    auto copy = [&](uint32_t bytes) {
+        while (bytes)
+        {
+            const uint32_t source = (x.sourceAddress + x.copiedBytes) % size;
+            const uint32_t chunk = std::min(bytes, size - source);
+            std::memcpy(x.packet.data() + x.copiedBytes, vu.m_activeVuData + source, chunk);
+            x.copiedBytes += chunk;
+            bytes -= chunk;
+        }
+    };
+    uint32_t credit = x.cycleCredit + 1u; // progressXgkick's ++, then 2 per qword
+    while (true)
+    {
+        // A GIFtag qword (currentTagEnd is 0 here: startXgkick reset it, and every tag below ends).
+        credit -= 2u;
+        if (x.copiedBytes > kBuffer - 16u)
+        {
+            x.cycleCredit = credit;
+            vu.reportReservedInstruction(false, 0xFFFFFFFBu);
+            x.active = false;
+            return;
+        }
+        const uint32_t qwordOffset = x.copiedBytes;
+        copy(16u);
+        uint64_t tagLo = 0;
+        std::memcpy(&tagLo, x.packet.data() + qwordOffset, sizeof(tagLo));
+        const uint32_t nloop = static_cast<uint32_t>(tagLo & 0x7FFFu);
+        const uint32_t format = static_cast<uint32_t>((tagLo >> 58) & 0x3u);
+        uint32_t nreg = static_cast<uint32_t>((tagLo >> 60) & 0xFu);
+        if (nreg == 0u)
+            nreg = 16u;
+        uint64_t tagBytes = 16u;
+        if (format == 0u)
+            tagBytes += static_cast<uint64_t>(nloop) * nreg * 16u;
+        else if (format == 1u)
+            tagBytes += ((static_cast<uint64_t>(nloop) * nreg + 1u) & ~1ull) * 8u;
+        else
+            tagBytes += static_cast<uint64_t>(nloop) * 16u;
+        if (tagBytes > kBuffer - qwordOffset)
+        {
+            x.cycleCredit = credit;
+            vu.reportReservedInstruction(false, 0xFFFFFFFBu);
+            x.active = false;
+            return;
+        }
+        x.currentTagEnd = qwordOffset + static_cast<uint32_t>(tagBytes);
+        x.currentTagEop = ((tagLo >> 15) & 1u) != 0u;
+        if (x.currentTagEop)
+            x.totalBytes = x.currentTagEnd;
+        // The tag's data: it ends within the buffer (checked above), so the per-qword overflow check cannot fire.
+        const uint32_t data = x.currentTagEnd - x.copiedBytes;
+        copy(data);
+        credit -= 2u * (data / 16u);
+        if (x.currentTagEop)
+        {
+            x.cycleCredit = credit;
+            vu.finishXgkick();
+            return;
+        }
+        x.currentTagEnd = 0u;
+        x.currentTagEop = false;
+    }
 }
 
 inline int VU1Lifted::handoff(VU1Interpreter &vu, const BranchBackup &bk, uint32_t pc)
@@ -146,6 +223,120 @@ inline float VU1Lifted::ftoi(float value, float scale)
     return out;
 }
 
+namespace
+{
+    // Flag-producing FMAC ops whose written lanes are all plainly normal or zero queue their MAC/status inline
+    // (laneFlags are only Z/S then, so no exact result is needed). PS2X_VU1_FLAGS_SLOW=1 sends them through
+    // fmacStoreSlow as before; PS2X_VU1_FLAGS_CHECK=1 also runs fmacStoreSlow on copies and compares.
+    const bool g_flagsSlow = [] {
+        const char *e = std::getenv("PS2X_VU1_FLAGS_SLOW");
+        return e && std::strcmp(e, "1") == 0;
+    }();
+    const bool g_flagsCheck = [] {
+        const char *e = std::getenv("PS2X_VU1_FLAGS_CHECK");
+        return e && std::strcmp(e, "1") == 0;
+    }();
+    uint64_t g_flagChecks = 0, g_flagMismatches = 0;
+}
+
+template <uint8_t Dest>
+inline void VU1Lifted::queueFlags(VU1Interpreter &vu, const uint8_t laneFlags[4])
+{
+    if constexpr (Dest == 0u)
+        return;
+    uint32_t mac = 0u, status = 0u;
+    for (uint32_t c = 0; c < 4u; ++c)
+        if (Dest & (8u >> c))
+        {
+            const uint32_t lane = 8u >> c;
+            if (laneFlags[c] & 0x1u)
+                mac |= lane;
+            if (laneFlags[c] & 0x2u)
+                mac |= lane << 4;
+            status |= laneFlags[c];
+        }
+    VU1Interpreter::FlagPipelineEntry *entry = nullptr;
+    for (VU1Interpreter::FlagPipelineEntry &candidate : vu.m_flagPipeline)
+        if (!candidate.valid)
+        {
+            entry = &candidate;
+            break;
+        }
+    if (!entry)
+    {
+        vu.updateFmacFlags(laneFlags, Dest, 0u); // reports the full pipeline exactly as before
+        return;
+    }
+    *entry = {};
+    entry->valid = true;
+    entry->issueCycle = vu.m_cycle;
+    entry->readyCycle = vu.m_cycle + VU1Interpreter::kFmacLatency;
+    vu.m_nextCommitCycle = std::min(vu.m_nextCommitCycle, entry->readyCycle);
+    vu.m_nextFlagCommit = std::min(vu.m_nextFlagCommit, entry->readyCycle);
+    entry->mac = mac;
+    entry->status = status;
+    entry->extraSticky = 0u;
+    entry->writesMac = true;
+    entry->writesStatus = true;
+}
+
+struct VU1Lifted::FlagStoreRef
+{
+    decltype(VU1Interpreter::m_flagPipeline) pipeline;
+    uint64_t nextCommit = 0, nextFlag = 0;
+    float dst[4] = {};
+};
+
+namespace
+{
+    thread_local VU1Lifted::FlagStoreRef g_flagRef;
+}
+
+// Before the inline store: fmacStoreSlow on copies of result/dst gives the reference pipeline; the pipeline is put back.
+void VU1Lifted::checkFlagStoreBefore(VU1Interpreter &vu, uint32_t word, const float *result, const float *dst,
+                                     const float (*lvf)[4], const float *lacc, uint8_t dest)
+{
+    const auto pipeline = vu.m_flagPipeline;
+    const uint64_t nextCommit = vu.m_nextCommitCycle, nextFlag = vu.m_nextFlagCommit;
+    float r[4], d[4];
+    std::memcpy(r, result, sizeof(r));
+    std::memcpy(d, dst, sizeof(d));
+    fmacStoreSlow(vu, word, r, d, lvf, lacc, dest, true);
+    g_flagRef.pipeline = vu.m_flagPipeline;
+    g_flagRef.nextCommit = vu.m_nextCommitCycle;
+    g_flagRef.nextFlag = vu.m_nextFlagCommit;
+    std::memcpy(g_flagRef.dst, d, sizeof(d));
+    vu.m_flagPipeline = pipeline;
+    vu.m_nextCommitCycle = nextCommit;
+    vu.m_nextFlagCommit = nextFlag;
+}
+
+void VU1Lifted::checkFlagStoreAfter(VU1Interpreter &vu, const float *dst)
+{
+    bool same = vu.m_nextCommitCycle == g_flagRef.nextCommit && vu.m_nextFlagCommit == g_flagRef.nextFlag &&
+                std::memcmp(dst, g_flagRef.dst, sizeof(g_flagRef.dst)) == 0;
+    for (size_t i = 0; i < vu.m_flagPipeline.size(); ++i)
+    {
+        const auto &a = vu.m_flagPipeline[i], &b = g_flagRef.pipeline[i];
+        same = same && a.valid == b.valid &&
+               (!a.valid || (a.readyCycle == b.readyCycle && a.issueCycle == b.issueCycle && a.mac == b.mac &&
+                             a.status == b.status && a.extraSticky == b.extraSticky && a.clip == b.clip &&
+                             a.writesMac == b.writesMac && a.writesStatus == b.writesStatus &&
+                             a.writesSticky == b.writesSticky && a.writesClip == b.writesClip));
+    }
+    ++g_flagChecks;
+    if (!same)
+    {
+        if (g_flagMismatches < 8u)
+            std::fprintf(stderr, "[vu1-lift] flag check: inline flag store differs from fmacStoreSlow (check %llu)\n",
+                         static_cast<unsigned long long>(g_flagChecks));
+        ++g_flagMismatches;
+    }
+    if ((g_flagChecks & 0xFFFFFu) == 0u)
+        std::fprintf(stderr, "[vu1-lift] flag check: %llu inline flag stores, %llu mismatches\n",
+                     static_cast<unsigned long long>(g_flagChecks), static_cast<unsigned long long>(g_flagMismatches));
+}
+
 // applyFmacDest / applyFmacDestAcc: normalize each written lane (exactly, through the interpreter,
 // only when the result is outside the plainly normal range), queue the flags if observable, write.
 // The common case (every lane plainly normal, flags not observed) stays inline.
@@ -153,6 +344,34 @@ template <uint8_t Dest, bool Flags>
 inline void VU1Lifted::fmacStore(VU1Interpreter &vu, uint32_t word, float *result, float *dst, const float (*lvf)[4],
                                  const float *lacc)
 {
+#ifdef PS2X_LIFTED_MULTI_IMAGE
+    if constexpr (Flags)
+    {
+        uint8_t laneFlags[4] = {0u, 0u, 0u, 0u};
+        bool plain = !g_flagsSlow;
+        for (uint32_t c = 0; c < 4u; ++c)
+            if (Dest & (8u >> c))
+            {
+                const uint32_t bits = lowBits(result[c]);
+                const bool zero = (bits << 1) == 0u;
+                plain &= ((bits >> 23) & 0xFFu) - 2u <= 251u || zero;
+                laneFlags[c] = static_cast<uint8_t>((zero ? 0x1u : 0u) | ((bits >> 31) != 0u ? 0x2u : 0u));
+            }
+        if (plain)
+        {
+            if (g_flagsCheck)
+                checkFlagStoreBefore(vu, word, result, dst, lvf, lacc, Dest);
+            if (vu.m_flagsObservable)
+                queueFlags<Dest>(vu, laneFlags);
+            for (uint32_t c = 0; c < 4u; ++c)
+                if (Dest & (8u >> c))
+                    dst[c] = result[c];
+            if (g_flagsCheck)
+                checkFlagStoreAfter(vu, dst);
+            return;
+        }
+    }
+#endif
     if constexpr (!Flags)
     {
         bool plain = true;
@@ -193,6 +412,16 @@ inline void VU1Lifted::fmacStoreV(VU1Interpreter &vu, uint32_t word, __m128 resu
 {
     // Bit 0 of the movemask is lane x, which is bit 3 of Dest.
     constexpr int laneMask = ((Dest >> 3) & 1) | ((Dest >> 1) & 2) | ((Dest << 1) & 4) | ((Dest << 3) & 8);
+#ifdef PS2X_LIFTED_MULTI_IMAGE
+    if constexpr (Flags)
+    {
+        // The scalar store has the inline flag path (and falls back to fmacStoreSlow itself).
+        alignas(16) float r[4];
+        _mm_store_ps(r, result);
+        fmacStore<Dest, true>(vu, word, r, dst, lvf, lacc);
+        return;
+    }
+#endif
     if constexpr (!Flags)
     {
         const __m128i bits = _mm_castps_si128(result);

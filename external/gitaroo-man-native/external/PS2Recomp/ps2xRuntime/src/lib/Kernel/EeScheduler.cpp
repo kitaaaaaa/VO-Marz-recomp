@@ -64,6 +64,41 @@ namespace
     // PS2X_TURBO=1 drops host-time pacing: vblanks fire as soon as enough guest cycles have run.
     const bool g_turboMode = std::getenv("PS2X_TURBO") != nullptr;
 
+    // PS2X_TRACE_VBLANK=1: per vblank interval, the cycles charged for guest code, the cycles added to catch up
+    // with wall time and while idle, and the time the EE slept because its cycles reached the vblank before the
+    // host clock did. A line for each vblank at which no thread was waiting in sceGsSyncV (the game had not
+    // finished its frame), and a summary every 600 vblanks.
+    const bool g_traceVBlank = std::getenv("PS2X_TRACE_VBLANK") != nullptr;
+    struct VBlankTrace
+    {
+        uint64_t charged = 0, floor = 0, idle = 0;
+        double sleptMs = 0.0;
+    };
+    VBlankTrace g_vblankTrace;
+    struct VBlankSummary
+    {
+        uint32_t vblanks = 0, missed = 0, missedSlept = 0, missedFloor = 0, hitSlept = 0;
+        uint64_t chargedHit = 0, chargedMissed = 0, chargedMax = 0;
+        double sleptMs = 0.0, waitMs[4] = {};
+    };
+    VBlankSummary g_vblankSummary;
+}
+extern std::atomic<uint64_t> g_traceVif1WaitNs, g_traceVif1RunNs, g_traceVif1DrainNs, g_traceGsQueueWaitNs;
+extern uint64_t g_traceVif1LongestWaitNs;
+extern uint32_t g_traceVif1LongestWaitReason;
+extern const char *g_traceVif1LongestWaitWhat;
+extern uint32_t g_traceKicks;
+extern uint64_t g_traceFirstKickNs, g_traceLastKickNs;
+uint64_t g_traceVBlankAtNs = 0;
+// PS2X_TRACE_VBLANK: vblanks that latch the same DISPFB1/2 as the vblank before (a repeated picture: Marz
+// swaps buffers every frame at 60 fps), counted per summary window.
+uint64_t g_traceLastDispfb = ~0ull;
+uint32_t g_traceRepeats = 0;
+namespace
+{
+    // The wait counters at the previous vblank, so each line shows what this interval added.
+    uint64_t g_vblankWaitBase[4] = {};
+
     uint64_t hostElapsedEeCycles(std::chrono::steady_clock::time_point now)
     {
         const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(now - g_hostClockEpoch).count();
@@ -384,6 +419,8 @@ void EeScheduler::postEvent(EeEvent event)
 bool EeScheduler::checkpointDue(uint32_t cycles) noexcept
 {
     accountCycles(cycles);
+    if (g_traceVBlank)
+        g_vblankTrace.charged += cycles;
 
     if (--g_hostClockCheckCountdown == 0u)
     {
@@ -393,6 +430,8 @@ bool EeScheduler::checkpointDue(uint32_t cycles) noexcept
         {
             const uint64_t behind = hostCycle - m_eeCycle;
             accountCycles(static_cast<uint32_t>(std::min<uint64_t>(behind, std::numeric_limits<uint32_t>::max())));
+            if (g_traceVBlank)
+                g_vblankTrace.floor += behind;
         }
     }
 
@@ -765,6 +804,22 @@ int EeScheduler::changePriority(int id, int priority, bool interruptSafe, int &o
         return KE_UNKNOWN_THID;
     }
     oldPriority = target->currentPriority;
+    // PS2X_TRACE_PRIO=1: the first 3000 priority changes made inside an invocation (interrupt/callback), on another
+    // thread, or that do not change the priority.
+    static const bool s_tracePrio = std::getenv("PS2X_TRACE_PRIO") != nullptr;
+    static int s_tracePrioLeft = 3000;
+    if (s_tracePrio && s_tracePrioLeft > 0 &&
+        (!target->invocations.empty() || oldPriority == priority || id != m_currentThreadId))
+    {
+        --s_tracePrioLeft;
+        const R5900Context &active = target->activeContext();
+        std::fprintf(stderr, "[prio] vsync=%llu cur=%d id=%d %d->%d inv=%zu kind=%d ra=0x%x base_pc=0x%x insideIrq=%d\n",
+                     static_cast<unsigned long long>(m_vsyncTick), m_currentThreadId, id, oldPriority, priority,
+                     target->invocations.size(),
+                     target->invocations.empty() ? -1 : static_cast<int>(target->invocations.back().kind),
+                     getRegU32(&active, 31), target->context.pc, m_insideInterrupt ? 1 : 0);
+        std::fflush(stderr);
+    }
     if (target->status == EeThreadStatus::Ready)
     {
         removeReady(*target);
@@ -1896,6 +1951,8 @@ void EeScheduler::processDueDeadlines()
                 m_eventCv.wait_until(lock, pacingDeadline, [this]()
                                      { return !m_events.empty() ||
                                               m_stopRequested.load(std::memory_order_acquire); });
+                if (g_traceVBlank)
+                    g_vblankTrace.sleptMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - now).count();
                 if (!m_events.empty() || m_stopRequested.load(std::memory_order_acquire))
                 {
                     updateNextDeadline();
@@ -1973,7 +2030,71 @@ void EeScheduler::processEvent(const EeEvent &event)
         // ending now (CSR.FIELD / vsyncTick still describe that field). The
         // host window only consumes this latched frame, which keeps
         // interlaced field parity in lockstep with the guest.
+        m_runtime.memory().pollVif1Chain(); // a finished chain's queued buffer swap shows from this field on
         m_runtime.gs().latchHostPresentationFrame();
+        if (g_traceVBlank)
+        {
+            {
+                const GSRegisters &regs = m_runtime.memory().gs();
+                const uint64_t dispfb = regs.dispfb1 ^ (regs.dispfb2 << 1);
+                g_traceRepeats += dispfb == g_traceLastDispfb;
+                g_traceLastDispfb = dispfb;
+            }
+            bool waiting = false;
+            for (const auto &[id, candidate] : m_threads)
+                waiting |= (candidate.status == EeThreadStatus::Waiting || candidate.status == EeThreadStatus::WaitingSuspended) &&
+                           candidate.wait.reason == EeWaitReason::VSync;
+            const VBlankTrace &t = g_vblankTrace;
+            VBlankSummary &s = g_vblankSummary;
+            const uint64_t waits[4] = {g_traceVif1WaitNs.load(), g_traceVif1RunNs.load(), g_traceVif1DrainNs.load(), g_traceGsQueueWaitNs.load()};
+            double waitMs[4];
+            for (int i = 0; i < 4; ++i)
+            {
+                waitMs[i] = static_cast<double>(waits[i] - g_vblankWaitBase[i]) / 1.0e6;
+                g_vblankWaitBase[i] = waits[i];
+                s.waitMs[i] += waitMs[i];
+            }
+            ++s.vblanks;
+            s.sleptMs += t.sleptMs;
+            s.chargedMax = std::max(s.chargedMax, t.charged);
+            if (waiting)
+            {
+                s.chargedHit += t.charged;
+                s.hitSlept += t.sleptMs > 0.0;
+            }
+            else
+            {
+                ++s.missed;
+                s.chargedMissed += t.charged;
+                s.missedSlept += t.sleptMs > 0.0;
+                s.missedFloor += t.floor > 0u;
+                std::cerr << "[vblank] " << m_vsyncTick << " missed: charged " << t.charged << " (" << (100 * t.charged / kVBlankPeriodCycles)
+                          << "% of a vblank) floor " << t.floor << " idle " << t.idle << " slept " << t.sleptMs << " ms; ms: vif1 wait "
+                          << waitMs[0] << " vif1 run " << waitMs[1] << " vif1 drain " << waitMs[2] << " gs queue wait " << waitMs[3] << "; longest vif1 wait "
+                          << static_cast<double>(g_traceVif1LongestWaitNs) / 1.0e6 << " ms at " << std::hex << g_traceVif1LongestWaitReason
+                          << std::dec << " " << g_traceVif1LongestWaitWhat << "; " << g_traceKicks << " kicks, first at "
+                          << (g_traceKicks ? static_cast<double>(g_traceFirstKickNs - g_traceVBlankAtNs) / 1.0e6 : 0.0) << " ms, last at "
+                          << (g_traceKicks ? static_cast<double>(g_traceLastKickNs - g_traceVBlankAtNs) / 1.0e6 : 0.0)
+                          << " ms after the previous vblank" << std::endl;
+            }
+            if (s.vblanks == 600u)
+            {
+                const uint32_t hit = s.vblanks - s.missed;
+                std::cerr << "[vblank] summary: 600 vblanks, missed " << s.missed << " (slept in " << s.missedSlept << ", floor in "
+                          << s.missedFloor << "), hit vblanks slept " << s.hitSlept << ", slept total " << s.sleptMs << " ms, charged avg hit "
+                          << (hit ? s.chargedHit / hit : 0u) << " missed " << (s.missed ? s.chargedMissed / s.missed : 0u) << " max " << s.chargedMax
+                          << " (vblank = " << kVBlankPeriodCycles << "); ms per vblank: vif1 wait " << s.waitMs[0] / 600.0 << " vif1 run "
+                          << s.waitMs[1] / 600.0 << " vif1 drain " << s.waitMs[2] / 600.0 << " gs queue wait " << s.waitMs[3] / 600.0 << "; repeated pictures " << g_traceRepeats << std::endl;
+                g_traceRepeats = 0;
+                s = VBlankSummary{};
+            }
+            g_vblankTrace = VBlankTrace{};
+            g_traceVif1LongestWaitNs = 0;
+            g_traceKicks = 0;
+            g_traceVBlankAtNs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                                          std::chrono::steady_clock::now().time_since_epoch())
+                                                          .count());
+        }
         ++m_vsyncTick;
         m_runtime.memory().gs().vsyncTick.store(m_vsyncTick, std::memory_order_release);
         if ((m_vsyncTick & 1u) != 0u)
@@ -2163,6 +2284,8 @@ void EeScheduler::waitForEvent()
             accountCycles(step);
             remaining -= step;
         }
+        if (g_traceVBlank)
+            g_vblankTrace.idle += elapsed;
         m_checkpointPending.store(true, std::memory_order_release);
     }
 }

@@ -34,6 +34,12 @@ public:
 
     void drain();
     bool empty() const { return m_queue.empty(); }
+    // submit + drain of one packet with nothing queued, without copying it (drain sends only the bytes).
+    void process(const uint8_t *data, uint32_t sizeBytes)
+    {
+        if (data && sizeBytes >= 16u && m_processFn)
+            m_processFn(data, sizeBytes);
+    }
 
 private:
     ProcessPacketFn m_processFn;

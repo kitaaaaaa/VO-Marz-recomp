@@ -2372,6 +2372,9 @@ namespace ps2_stubs
 
     // Set by games whose picture thread also feeds the decoder (Sofdec): waiting there could never end.
     bool g_mpegNeverWaitForPicture = false;
+    // Set by games whose player times the pictures itself (Sofdec): the vsync wait below parks its decode thread,
+    // which ReferThreadStatus then reports as waiting.
+    bool g_mpegNoPicturePacing = false;
 
     void sceMpegGetPicture(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
@@ -2435,7 +2438,7 @@ namespace ps2_stubs
                     playback.nextPictureTickQ32 = currentTickQ32;
                 }
 
-                if (currentTickQ32 < presentationTargetQ32)
+                if (!g_mpegNoPicturePacing && currentTickQ32 < presentationTargetQ32)
                 {
                     const uint64_t eligibleTick = (presentationTargetQ32 + kPictureClockOne - 1u) >> 32u;
                     lock.unlock();

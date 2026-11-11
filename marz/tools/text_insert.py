@@ -124,7 +124,8 @@ def main():
                 old = len(u['jp'].encode('cp932'))
                 b = encode(en)
                 elf.seek(off)
-                elf.write(b.ljust(max(old, len(b)), b'\0'))
+                # Out to the slot's end, so a longer earlier translation leaves nothing behind.
+                elf.write(b.ljust(max(old, u['max']), b'\0'))
             counts[u['kind']] += 1
         for off, (jp, en) in ELF_FIXED.items():
             elf.seek(off)

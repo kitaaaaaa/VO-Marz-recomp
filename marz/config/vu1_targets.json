@@ -1,0 +1,380 @@
+[
+ {
+  "base": "0x0000",
+  "bytes": 2048,
+  "crc32": "724ed8ce",
+  "entries": [],
+  "jr_targets": []
+ },
+ {
+  "base": "0x0800",
+  "bytes": 2048,
+  "crc32": "c52a21c8",
+  "entries": [],
+  "jr_targets": []
+ },
+ {
+  "base": "0x1000",
+  "bytes": 2048,
+  "crc32": "9d85918f",
+  "entries": [],
+  "jr_targets": []
+ },
+ {
+  "base": "0x1800",
+  "bytes": 2048,
+  "crc32": "c0aac451",
+  "entries": [],
+  "jr_targets": []
+ },
+ {
+  "base": "0x2000",
+  "bytes": 664,
+  "crc32": "436907dd",
+  "entries": [],
+  "jr_targets": []
+ },
+ {
+  "base": "0x0000",
+  "bytes": 2048,
+  "crc32": "6cea7487",
+  "entries": [],
+  "jr_targets": []
+ },
+ {
+  "base": "0x0800",
+  "bytes": 2048,
+  "crc32": "adadba0b",
+  "entries": [],
+  "jr_targets": []
+ },
+ {
+  "base": "0x1000",
+  "bytes": 2048,
+  "crc32": "54ae9957",
+  "entries": [],
+  "jr_targets": []
+ },
+ {
+  "base": "0x1800",
+  "bytes": 2048,
+  "crc32": "8cf123f4",
+  "entries": [],
+  "jr_targets": []
+ },
+ {
+  "base": "0x2000",
+  "bytes": 1600,
+  "crc32": "5eb40fdd",
+  "entries": [],
+  "jr_targets": []
+ },
+ {
+  "base": "0x0000",
+  "bytes": 2048,
+  "crc32": "3003e5e4",
+  "entries": [],
+  "jr_targets": []
+ },
+ {
+  "base": "0x0800",
+  "bytes": 2048,
+  "crc32": "4bba5f15",
+  "entries": [],
+  "jr_targets": []
+ },
+ {
+  "base": "0x1000",
+  "bytes": 2048,
+  "crc32": "f95c687a",
+  "entries": [],
+  "jr_targets": []
+ },
+ {
+  "base": "0x1800",
+  "bytes": 1672,
+  "crc32": "62da920d",
+  "entries": [],
+  "jr_targets": []
+ },
+ {
+  "base": "0x0000",
+  "bytes": 2048,
+  "crc32": "5f89d18f",
+  "entries": [],
+  "jr_targets": []
+ },
+ {
+  "base": "0x0800",
+  "bytes": 2048,
+  "crc32": "a3b00f2f",
+  "entries": [],
+  "jr_targets": []
+ },
+ {
+  "base": "0x1000",
+  "bytes": 2048,
+  "crc32": "0796fd75",
+  "entries": [],
+  "jr_targets": []
+ },
+ {
+  "base": "0x1800",
+  "bytes": 2048,
+  "crc32": "6255f603",
+  "entries": [],
+  "jr_targets": []
+ },
+ {
+  "base": "0x2000",
+  "bytes": 176,
+  "crc32": "1e9fb005",
+  "entries": [],
+  "jr_targets": []
+ },
+ {
+  "base": "0x0000",
+  "bytes": 2048,
+  "crc32": "e248b8a8",
+  "entries": [],
+  "jr_targets": [
+   "0x558"
+  ]
+ },
+ {
+  "base": "0x0800",
+  "bytes": 2048,
+  "crc32": "fc253aa5",
+  "entries": [],
+  "jr_targets": []
+ },
+ {
+  "base": "0x1000",
+  "bytes": 2048,
+  "crc32": "dfac4e12",
+  "entries": [],
+  "jr_targets": []
+ },
+ {
+  "base": "0x1800",
+  "bytes": 1744,
+  "crc32": "ab1fac96",
+  "entries": [],
+  "jr_targets": []
+ },
+ {
+  "base": "0x0000",
+  "bytes": 2048,
+  "crc32": "2e0f38d0",
+  "entries": [],
+  "jr_targets": []
+ },
+ {
+  "base": "0x0800",
+  "bytes": 2048,
+  "crc32": "c4bd5054",
+  "entries": [],
+  "jr_targets": []
+ },
+ {
+  "base": "0x1000",
+  "bytes": 2048,
+  "crc32": "f4db46fa",
+  "entries": [],
+  "jr_targets": []
+ },
+ {
+  "base": "0x1800",
+  "bytes": 2048,
+  "crc32": "26274731",
+  "entries": [],
+  "jr_targets": []
+ },
+ {
+  "base": "0x2000",
+  "bytes": 192,
+  "crc32": "f850b49a",
+  "entries": [],
+  "jr_targets": []
+ },
+ {
+  "base": "0x0000",
+  "bytes": 2048,
+  "crc32": "40f37c98",
+  "entries": [],
+  "jr_targets": [
+   "0x558"
+  ]
+ },
+ {
+  "base": "0x0800",
+  "bytes": 2048,
+  "crc32": "542b7e67",
+  "entries": [],
+  "jr_targets": [
+   "0x920",
+   "0xD20",
+   "0xD58",
+   "0xDF8",
+   "0xE28",
+   "0xEC8",
+   "0xEF8",
+   "0xF98",
+   "0xFC8"
+  ]
+ },
+ {
+  "base": "0x1000",
+  "bytes": 1688,
+  "crc32": "b04357cc",
+  "entries": [],
+  "jr_targets": [
+   "0x1068",
+   "0x1098",
+   "0x1350",
+   "0x13C8",
+   "0x1558",
+   "0x15A8"
+  ]
+ },
+ {
+  "base": "0x0000",
+  "bytes": 2048,
+  "crc32": "1eaa1a45",
+  "entries": [],
+  "jr_targets": []
+ },
+ {
+  "base": "0x0800",
+  "bytes": 2048,
+  "crc32": "8e1de591",
+  "entries": [],
+  "jr_targets": []
+ },
+ {
+  "base": "0x1000",
+  "bytes": 2000,
+  "crc32": "1839c174",
+  "entries": [],
+  "jr_targets": []
+ },
+ {
+  "base": "0x0000",
+  "bytes": 2048,
+  "crc32": "6a9d1349",
+  "entries": [],
+  "jr_targets": []
+ },
+ {
+  "base": "0x0800",
+  "bytes": 2048,
+  "crc32": "4abab76c",
+  "entries": [],
+  "jr_targets": []
+ },
+ {
+  "base": "0x1000",
+  "bytes": 1704,
+  "crc32": "d912b12c",
+  "entries": [],
+  "jr_targets": []
+ },
+ {
+  "base": "0x0000",
+  "bytes": 2048,
+  "crc32": "0c68c0d8",
+  "entries": [],
+  "jr_targets": []
+ },
+ {
+  "base": "0x0800",
+  "bytes": 2048,
+  "crc32": "4f5f96bb",
+  "entries": [],
+  "jr_targets": []
+ },
+ {
+  "base": "0x1000",
+  "bytes": 2048,
+  "crc32": "328a407d",
+  "entries": [],
+  "jr_targets": []
+ },
+ {
+  "base": "0x1800",
+  "bytes": 64,
+  "crc32": "a7b705bd",
+  "entries": [],
+  "jr_targets": []
+ },
+ {
+  "base": "0x0070",
+  "bytes": 488,
+  "crc32": "97531523",
+  "entries": [],
+  "jr_targets": []
+ },
+ {
+  "base": "0x0070",
+  "bytes": 160,
+  "crc32": "b042d0a5",
+  "entries": [],
+  "jr_targets": []
+ },
+ {
+  "base": "0x0070",
+  "bytes": 2048,
+  "crc32": "3d6956cb",
+  "entries": [],
+  "jr_targets": []
+ },
+ {
+  "base": "0x0870",
+  "bytes": 216,
+  "crc32": "4c86719b",
+  "entries": [],
+  "jr_targets": []
+ },
+ {
+  "base": "0x0070",
+  "bytes": 768,
+  "crc32": "93e5d9db",
+  "entries": [],
+  "jr_targets": []
+ },
+ {
+  "base": "0x0070",
+  "bytes": 1048,
+  "crc32": "2d4bed5b",
+  "entries": [],
+  "jr_targets": []
+ },
+ {
+  "base": "0x0070",
+  "bytes": 408,
+  "crc32": "e425d7fc",
+  "entries": [],
+  "jr_targets": []
+ },
+ {
+  "base": "0x0070",
+  "bytes": 592,
+  "crc32": "62be4183",
+  "entries": [],
+  "jr_targets": []
+ },
+ {
+  "base": "0x0070",
+  "bytes": 416,
+  "crc32": "2e7e85dc",
+  "entries": [],
+  "jr_targets": []
+ },
+ {
+  "base": "0x0000",
+  "bytes": 112,
+  "crc32": "fcbd9b4f",
+  "entries": [],
+  "jr_targets": []
+ }
+]

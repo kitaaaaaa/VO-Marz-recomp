@@ -345,6 +345,8 @@ public:
     void processVIF1Data(const uint8_t *data, uint32_t sizeBytes);
     void processPendingTransfers();
     std::vector<uint32_t> consumeCompletedDmacCauses();
+    // Completes a finished VIF1 chain (and applies the GS privileged writes queued behind it); never waits.
+    void pollVif1Chain();
 
     int pollDmaRegisters();
 

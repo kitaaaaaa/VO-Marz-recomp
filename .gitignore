@@ -10,6 +10,9 @@
 toolchain/
 marz/iso/
 marz/iso_jp/
+marz/iso_en/
+marz/bin/
+Marz.exe
 marz/build/
 marz/build_us/
 marz/logs/

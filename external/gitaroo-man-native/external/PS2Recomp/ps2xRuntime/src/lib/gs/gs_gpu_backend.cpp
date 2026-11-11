@@ -123,8 +123,9 @@ flat in float vDepthConst;
 uniform int uTme;
 uniform usampler2D uVram;       // GS memory as 1024 x 1024 32-bit words
 uniform usampler2D uSwizzle;    // page table of the texture's format: [base block % 32][y][x]
-uniform sampler2D uPalette;
-uniform uint uTbp;              // TBP0 (blocks)
+uniform sampler2D uPalette;     // one CLUT per row (GSGpuRenderer::GetPalette)
+uniform int uPaletteRow;
+uniform uint uTbp;             // TBP0 (blocks)
 uniform uint uTbw;              // TBW (64-pixel units)
 uniform ivec2 uPageSize;
 uniform uint uUnpackedBits;     // 32, 16, 8 or 4
@@ -198,7 +199,7 @@ vec4 fetchTexel(int u, int v)
     v = wrapCoord(v, uTexSize.y, uWrapMode.y, uRegion.z, uRegion.w);
     uint raw = readRaw(u, v);
     if (uTexFormat == 3)
-        return floor(texelFetch(uPalette, ivec2(int(raw & 0xFFu), 0), 0) * 255.0 + 0.5);
+        return floor(texelFetch(uPalette, ivec2(int(raw & 0xFFu), uPaletteRow), 0) * 255.0 + 0.5);
     uint r, g, b, a;
     if (uTexFormat == 2 || uTexFormat == 5)
     {
@@ -653,7 +654,7 @@ private:
         uint64_t clamp;
         uint32_t fogColor;
         uint32_t tbp, tbw, texPsm, texa;
-        uint32_t palette; // generation of the palette texture contents
+        uint32_t palette; // palette texture row + 1 (0: none)
         uint32_t texW, texH;
         uint32_t alphaSplit; // (Cs - Cd) * f + Cd where f can exceed 1: drawn in two passes
         uint32_t pipe16, dthe; // 16-bit frame: the GS output stage in the shader
@@ -684,8 +685,40 @@ private:
     GSCpuBackend &m_cpu;
     bool m_glReady = false;
     GLuint m_program = 0, m_vao = 0, m_vbo = 0;
-    std::unordered_map<std::string, GLint> m_uniforms;
+    GLsizeiptr m_vboSize = 0, m_vboUsed = 0; // m_vbo as a ring: each flush appends, a new store only when full
+    std::unordered_map<const char *, GLint> m_uniforms; // keyed by the literal's address: no string built per call
+    struct UniformValue
+    {
+        uint32_t bits[4];
+        bool known = false;
+    };
+    std::vector<UniformValue> m_uniformValues; // by location: what m_program holds, so unchanged values are not resent
     GLint U(const char *name);
+    // glUniform*(U(name), args...), skipped when the location already holds these values. Only this file writes
+    // m_program's uniforms. Off by default (played choppier, 2026-11-11): PS2X_GS_UNIFORM_SKIP=1 turns it on.
+    template <typename Fn, typename... A>
+    void SetU(Fn fn, const char *name, A... args)
+    {
+        static_assert(sizeof...(A) <= 4 && ((sizeof(A) == 4) && ...));
+        static const bool s_always = std::getenv("PS2X_GS_UNIFORM_SKIP") == nullptr;
+        const GLint loc = U(name);
+        if (s_always || loc < 0)
+        {
+            fn(loc, args...);
+            return;
+        }
+        uint32_t bits[4] = {};
+        size_t i = 0;
+        ((std::memcpy(&bits[i++], &args, 4)), ...);
+        if (static_cast<size_t>(loc) >= m_uniformValues.size())
+            m_uniformValues.resize(static_cast<size_t>(loc) + 1u);
+        UniformValue &v = m_uniformValues[static_cast<size_t>(loc)];
+        if (v.known && std::memcmp(v.bits, bits, sizeof(bits)) == 0)
+            return;
+        std::memcpy(v.bits, bits, sizeof(bits));
+        v.known = true;
+        fn(loc, args...);
+    }
 
     std::vector<std::unique_ptr<Target>> m_targets;
     std::map<std::pair<GLuint, GLuint>, GLuint> m_fbos;
@@ -694,10 +727,23 @@ private:
     std::array<uint64_t, kPageCount> m_mirrorVersion{};
     bool m_mirrorDirty = true;
     std::map<const uint16_t *, GLuint> m_swizzleTables;
+    // Palettes the draws use, one per row of m_paletteTex, found by their colours. Games that reload
+    // the CLUT before every primitive switch between a few palettes; rewriting one texture for each
+    // switch serialized the GPU. PS2X_GS_PALETTE_ROWS=1 keeps a single palette (rewritten on change).
+    struct PaletteRow
+    {
+        uint32_t entries[256];
+        uint64_t hash;
+        uint32_t maxAlpha;
+        bool used;
+    };
     GLuint m_paletteTex = 0;
+    uint32_t m_paletteRows = 0;
+    std::vector<PaletteRow> m_paletteCache;
+    std::unordered_multimap<uint64_t, uint32_t> m_paletteByHash;
+    uint32_t m_paletteNextRow = 0; // next row to fill (round robin once all are used)
     std::tuple<uint64_t, uint32_t, uint32_t, uint32_t, uint32_t, uint64_t> m_paletteKey{};
-    uint32_t m_paletteEntries[256]{};
-    uint32_t m_paletteGeneration = 0;
+    uint32_t m_paletteRow = 0;        // row of the palette m_paletteKey selects
     uint32_t m_paletteMaxAlpha = 255; // largest alpha in the current palette
     std::array<uint64_t, kPageCount> m_pageVersion{};
     uint64_t m_versionCounter = 0;
@@ -1076,6 +1122,9 @@ void GSGpuRenderer::Release()
     if (m_paletteTex)
         glDeleteTextures(1, &m_paletteTex);
     m_paletteTex = 0;
+    m_paletteCache.clear();
+    m_paletteByHash.clear();
+    m_paletteNextRow = 0;
     for (auto &[k, f] : m_fbos)
         glDeleteFramebuffers(1, &f);
     for (auto &[k, t] : m_swizzleTables)
@@ -1087,8 +1136,11 @@ void GSGpuRenderer::Release()
     m_fbos.clear();
     m_swizzleTables.clear();
     glDeleteBuffers(1, &m_vbo);
+    m_vboSize = m_vboUsed = 0;
     glDeleteVertexArrays(1, &m_vao);
     glDeleteProgram(m_program);
+    m_uniforms.clear();
+    m_uniformValues.clear();
     glDeleteProgram(m_presentProgram);
     glDeleteVertexArrays(1, &m_emptyVao);
     for (GLuint *tex : {&m_staging[0], &m_staging[1], &m_cur.tex, &m_prev.tex, &m_outputTex})
@@ -1492,8 +1544,9 @@ GLuint GSGpuRenderer::SwizzleTable(uint32_t psm, uint32_t &pw, uint32_t &ph)
     return tex;
 }
 
-// One palette texture, rewritten when the CLUT (or how it is read) changes. Draws batched against
-// the previous contents are flushed first; the returned generation goes into the draw key.
+// The palette texture row holding the CLUT as this draw reads it, filled when those colours are not
+// in any row yet. A row is only rewritten after the batched draws are flushed (they may read it).
+// Returns the row + 1, which goes into the draw key (0 = no palette).
 uint32_t GSGpuRenderer::GetPalette(const GSDrawState &state)
 {
     const GSTex0Reg &tex0 = state.context.tex0;
@@ -1502,35 +1555,77 @@ uint32_t GSGpuRenderer::GetPalette(const GSDrawState &state)
     const auto key = std::make_tuple(m_cpu.ClutVersion(), static_cast<uint32_t>(tex0.cpsm), static_cast<uint32_t>(tex0.csm),
                                      static_cast<uint32_t>(tex0.csa), static_cast<uint32_t>(tex0.psm), texa);
     if (m_paletteTex && key == m_paletteKey)
-        return m_paletteGeneration;
+        return m_paletteRow + 1u;
     uint32_t entries[256];
     m_cpu.PaletteEntries(state, entries);
-    if (m_paletteTex && std::memcmp(entries, m_paletteEntries, sizeof(entries)) == 0)
+    uint64_t hash = 14695981039346656037ull; // FNV-1a
+    for (uint32_t entry : entries)
     {
-        m_paletteKey = key; // reloaded with the same colours
-        return m_paletteGeneration;
+        hash ^= entry;
+        hash *= 1099511628211ull;
     }
-    FlushDraws();
-    ++m_statPalettes;
+    if (m_paletteTex)
+    {
+        const auto range = m_paletteByHash.equal_range(hash);
+        for (auto it = range.first; it != range.second; ++it)
+        {
+            const PaletteRow &row = m_paletteCache[it->second];
+            if (std::memcmp(row.entries, entries, sizeof(entries)) == 0)
+            {
+                m_paletteKey = key;
+                m_paletteRow = it->second;
+                m_paletteMaxAlpha = row.maxAlpha;
+                return m_paletteRow + 1u;
+            }
+        }
+    }
     glActiveTexture(GL_TEXTURE3);
     if (!m_paletteTex)
     {
+        if (m_paletteRows == 0u)
+        {
+            const char *rows = std::getenv("PS2X_GS_PALETTE_ROWS");
+            m_paletteRows = static_cast<uint32_t>(std::clamp(rows && *rows ? std::atoi(rows) : 1024, 1, 4096));
+        }
+        m_paletteCache.assign(m_paletteRows, PaletteRow{});
+        m_paletteByHash.clear();
+        m_paletteNextRow = 0;
         glGenTextures(1, &m_paletteTex);
         glBindTexture(GL_TEXTURE_2D, m_paletteTex);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 256, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 256, static_cast<GLsizei>(m_paletteRows), 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     }
+    const uint32_t rowIndex = m_paletteNextRow;
+    m_paletteNextRow = (m_paletteNextRow + 1u) % m_paletteRows;
+    PaletteRow &row = m_paletteCache[rowIndex];
+    if (row.used)
+    {
+        FlushDraws(); // batched draws may still read the colours this row holds
+        const auto range = m_paletteByHash.equal_range(row.hash);
+        for (auto it = range.first; it != range.second; ++it)
+            if (it->second == rowIndex)
+            {
+                m_paletteByHash.erase(it);
+                break;
+            }
+    }
+    ++m_statPalettes;
     glBindTexture(GL_TEXTURE_2D, m_paletteTex);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
-    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 1, GL_RGBA, GL_UNSIGNED_BYTE, entries);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, static_cast<GLint>(rowIndex), 256, 1, GL_RGBA, GL_UNSIGNED_BYTE, entries);
     glActiveTexture(GL_TEXTURE0);
-    std::memcpy(m_paletteEntries, entries, sizeof(entries));
-    m_paletteMaxAlpha = 0;
+    std::memcpy(row.entries, entries, sizeof(entries));
+    row.hash = hash;
+    row.used = true;
+    row.maxAlpha = 0;
     for (uint32_t entry : entries)
-        m_paletteMaxAlpha = std::max(m_paletteMaxAlpha, entry >> 24);
+        row.maxAlpha = std::max(row.maxAlpha, entry >> 24);
+    m_paletteByHash.emplace(hash, rowIndex);
     m_paletteKey = key;
-    return ++m_paletteGeneration;
+    m_paletteRow = rowIndex;
+    m_paletteMaxAlpha = row.maxAlpha;
+    return m_paletteRow + 1u;
 }
 
 void GSGpuRenderer::Draw(const GSPrimitiveBatch &batch)
@@ -1583,7 +1678,13 @@ void GSGpuRenderer::Draw(const GSPrimitiveBatch &batch)
     // PS2X_GS_8BIT=1 keeps the older path: 8-bit targets, no dither, GL blending.
     static const bool s_pipe16 = std::getenv("PS2X_GS_8BIT") == nullptr;
     key.pipe16 = s_pipe16 && isSixteenBitPsm(ctx.frame.psm) ? 1u : 0u;
-    key.dthe = key.pipe16 ? static_cast<uint32_t>(st.dthe & 1u) : 0u;
+    // PS2X_GS_DITHER=0 ignores DTHE (16-bit frames keep the 5-bit truncation).
+    static const bool s_dither = []()
+    {
+        const char *v = std::getenv("PS2X_GS_DITHER");
+        return !(v && v[0] == '0');
+    }();
+    key.dthe = key.pipe16 && s_dither ? static_cast<uint32_t>(st.dthe & 1u) : 0u;
     key.dimx = key.dthe ? st.dimx : 0u;
     key.fba = static_cast<uint32_t>(ctx.fba & 1u);
     key.tme = st.prim.tme ? 1u : 0u;
@@ -1912,20 +2013,20 @@ void GSGpuRenderer::ApplyKey(const DrawKey &key, Target *color, Target *depth)
     }
 
     glUseProgram(m_program);
-    glUniform2f(U("uTargetSize"), static_cast<float>(width), static_cast<float>(height));
+    SetU(glUniform2f, "uTargetSize", static_cast<float>(width), static_cast<float>(height));
     if (m_interlock)
     {
-        glUniform1i(U("uDepthMode"), depth ? static_cast<GLint>(key.depthMode) : 0);
-        glUniform1i(U("uZtstMode"), static_cast<GLint>(key.ztst));
-        glUniform1i(U("uHasColor"), (key.pipe16 && color) ? 1 : 0);
-        glUniform4f(U("uColorWrite"), (key.colorMask & 1u) ? 1.0f : 0.0f, (key.colorMask & 2u) ? 1.0f : 0.0f,
+        SetU(glUniform1i, "uDepthMode", depth ? static_cast<GLint>(key.depthMode) : 0);
+        SetU(glUniform1i, "uZtstMode", static_cast<GLint>(key.ztst));
+        SetU(glUniform1i, "uHasColor", (key.pipe16 && color) ? 1 : 0);
+        SetU(glUniform4f, "uColorWrite", (key.colorMask & 1u) ? 1.0f : 0.0f, (key.colorMask & 2u) ? 1.0f : 0.0f,
                     (key.colorMask & 4u) ? 1.0f : 0.0f, (key.colorMask & 8u) ? 1.0f : 0.0f);
         if (depth)
             glBindImageTexture(1, depth->tex, 0, GL_FALSE, 0, GL_READ_WRITE, GL_R32F);
         if (key.pipe16 && color)
             glBindImageTexture(0, color->tex, 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA8);
     }
-    glUniform1i(U("uTme"), static_cast<GLint>(key.tme));
+    SetU(glUniform1i, "uTme", static_cast<GLint>(key.tme));
     GLuint swizzle = 0;
     if (key.tme)
     {
@@ -1939,36 +2040,37 @@ void GSGpuRenderer::ApplyKey(const DrawKey &key, Target *color, Target *depth)
                                 : isSixteenBitPsm(psm) ? 2u : 4u;
         const int format = isIndexedPsm(psm) ? 3 : psm == GS_PSM_CT24 ? 1 : (psm == GS_PSM_CT16 || psm == GS_PSM_CT16S) ? 2
                            : psm == GS_PSM_Z24 ? 4 : (psm == GS_PSM_Z16 || psm == GS_PSM_Z16S) ? 5 : 0;
-        glUniform1ui(U("uTbp"), key.tbp);
-        glUniform1ui(U("uTbw"), key.tbw);
-        glUniform2i(U("uPageSize"), static_cast<GLint>(pw), static_cast<GLint>(ph));
-        glUniform1ui(U("uUnpackedBits"), unpacked);
-        glUniform1ui(U("uBitOffset"), bitOffset);
-        glUniform1ui(U("uPackedBytes"), packed);
-        glUniform1i(U("uNibble"), nibble ? 1 : 0);
-        glUniform1i(U("uTexFormat"), format);
-        glUniform3i(U("uTexa"), static_cast<GLint>(key.texa & 0xFFu), static_cast<GLint>((key.texa >> 8) & 0xFFu),
+        SetU(glUniform1ui, "uTbp", key.tbp);
+        SetU(glUniform1ui, "uTbw", key.tbw);
+        SetU(glUniform2i, "uPageSize", static_cast<GLint>(pw), static_cast<GLint>(ph));
+        SetU(glUniform1ui, "uUnpackedBits", unpacked);
+        SetU(glUniform1ui, "uBitOffset", bitOffset);
+        SetU(glUniform1ui, "uPackedBytes", packed);
+        SetU(glUniform1i, "uNibble", nibble ? 1 : 0);
+        SetU(glUniform1i, "uTexFormat", format);
+        SetU(glUniform3i, "uTexa", static_cast<GLint>(key.texa & 0xFFu), static_cast<GLint>((key.texa >> 8) & 0xFFu),
                     static_cast<GLint>((key.texa >> 16) & 1u));
     }
-    glUniform1i(U("uFst"), static_cast<GLint>(key.fst));
-    glUniform1i(U("uSprite"), static_cast<GLint>(key.sprite));
-    glUniform1i(U("uLinear"), static_cast<GLint>(key.linear));
-    glUniform2i(U("uTexSize"), static_cast<GLint>(std::max<uint32_t>(key.texW, 1u)), static_cast<GLint>(std::max<uint32_t>(key.texH, 1u)));
-    glUniform2i(U("uWrapMode"), static_cast<GLint>(key.clamp & 3u), static_cast<GLint>((key.clamp >> 2) & 3u));
-    glUniform4i(U("uRegion"), static_cast<GLint>((key.clamp >> 4) & 0x3FFu), static_cast<GLint>((key.clamp >> 14) & 0x3FFu),
+    SetU(glUniform1i, "uFst", static_cast<GLint>(key.fst));
+    SetU(glUniform1i, "uSprite", static_cast<GLint>(key.sprite));
+    SetU(glUniform1i, "uLinear", static_cast<GLint>(key.linear));
+    SetU(glUniform2i, "uTexSize", static_cast<GLint>(std::max<uint32_t>(key.texW, 1u)), static_cast<GLint>(std::max<uint32_t>(key.texH, 1u)));
+    SetU(glUniform2i, "uWrapMode", static_cast<GLint>(key.clamp & 3u), static_cast<GLint>((key.clamp >> 2) & 3u));
+    SetU(glUniform4i, "uRegion", static_cast<GLint>((key.clamp >> 4) & 0x3FFu), static_cast<GLint>((key.clamp >> 14) & 0x3FFu),
                 static_cast<GLint>((key.clamp >> 24) & 0x3FFu), static_cast<GLint>((key.clamp >> 34) & 0x3FFu));
-    glUniform1i(U("uTfx"), static_cast<GLint>(key.tfx));
-    glUniform1i(U("uTcc"), static_cast<GLint>(key.tcc));
-    glUniform1i(U("uFge"), static_cast<GLint>(key.fge));
-    glUniform3f(U("uFogColor"), static_cast<float>(key.fogColor & 0xFFu), static_cast<float>((key.fogColor >> 8) & 0xFFu),
+    SetU(glUniform1i, "uTfx", static_cast<GLint>(key.tfx));
+    SetU(glUniform1i, "uTcc", static_cast<GLint>(key.tcc));
+    SetU(glUniform1i, "uFge", static_cast<GLint>(key.fge));
+    SetU(glUniform3f, "uFogColor", static_cast<float>(key.fogColor & 0xFFu), static_cast<float>((key.fogColor >> 8) & 0xFFu),
                 static_cast<float>((key.fogColor >> 16) & 0xFFu));
-    glUniform1i(U("uAte"), static_cast<GLint>(key.ate));
-    glUniform1i(U("uAtst"), static_cast<GLint>(key.atst));
-    glUniform1f(U("uAref"), static_cast<float>(key.aref));
-    glUniform1i(U("uFba"), static_cast<GLint>(key.fba));
-    glUniform1i(U("uVram"), 0);
-    glUniform1i(U("uSwizzle"), 1);
-    glUniform1i(U("uPalette"), 2);
+    SetU(glUniform1i, "uAte", static_cast<GLint>(key.ate));
+    SetU(glUniform1i, "uAtst", static_cast<GLint>(key.atst));
+    SetU(glUniform1f, "uAref", static_cast<float>(key.aref));
+    SetU(glUniform1i, "uFba", static_cast<GLint>(key.fba));
+    SetU(glUniform1i, "uVram", 0);
+    SetU(glUniform1i, "uSwizzle", 1);
+    SetU(glUniform1i, "uPalette", 2);
+    SetU(glUniform1i, "uPaletteRow", key.palette ? static_cast<GLint>(key.palette - 1u) : 0);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, key.tme ? m_mirrorTex : 0u);
     glActiveTexture(GL_TEXTURE1);
@@ -1980,8 +2082,8 @@ void GSGpuRenderer::ApplyKey(const DrawKey &key, Target *color, Target *depth)
     // Blending: (A - B) * C / 128 + D with A, B, D in {Cs, Cd, 0} and C in {As, Ad, FIX}, as
     // cs * Cs + cd * Cd. The shader outputs Cs * |cs| and the blend factor f = C / 128; GL applies
     // the sign (equation) and |cd| (destination factor).
-    glUniform1i(U("uAlphaPass"), key.alphaSplit ? 1 : 0);
-    glUniform1i(U("uPipe16"), static_cast<GLint>(key.pipe16));
+    SetU(glUniform1i, "uAlphaPass", key.alphaSplit ? 1 : 0);
+    SetU(glUniform1i, "uPipe16", static_cast<GLint>(key.pipe16));
     if (key.pipe16)
     {
         // The DIMX register holds 16 signed 3-bit values, four bits apart: row 0 column 0 first.
@@ -1992,15 +2094,15 @@ void GSGpuRenderer::ApplyKey(const DrawKey &key, Target *color, Target *depth)
             dimx[i] = value >= 4 ? value - 8 : value;
         }
         glDisable(GL_BLEND);
-        glUniform1i(U("uBlendOn"), static_cast<GLint>(key.abe));
-        glUniform4i(U("uBlendSel"), static_cast<GLint>(key.alpha & 3u), static_cast<GLint>((key.alpha >> 2) & 3u),
+        SetU(glUniform1i, "uBlendOn", static_cast<GLint>(key.abe));
+        SetU(glUniform4i, "uBlendSel", static_cast<GLint>(key.alpha & 3u), static_cast<GLint>((key.alpha >> 2) & 3u),
                     static_cast<GLint>((key.alpha >> 4) & 3u), static_cast<GLint>((key.alpha >> 6) & 3u));
-        glUniform1f(U("uBlendFix"), static_cast<float>((key.alpha >> 32) & 0xFFu));
-        glUniform1i(U("uColClamp"), static_cast<GLint>(key.colclamp));
-        glUniform1i(U("uDither"), static_cast<GLint>(key.dthe));
+        SetU(glUniform1f, "uBlendFix", static_cast<float>((key.alpha >> 32) & 0xFFu));
+        SetU(glUniform1i, "uColClamp", static_cast<GLint>(key.colclamp));
+        SetU(glUniform1i, "uDither", static_cast<GLint>(key.dthe));
         glUniform1iv(U("uDimx"), 16, dimx);
-        glUniform1i(U("uFrameScale"), static_cast<GLint>(m_scale));
-        glUniform1i(U("uFrameCopy"), 4);
+        SetU(glUniform1i, "uFrameScale", static_cast<GLint>(m_scale));
+        SetU(glUniform1i, "uFrameCopy", 4);
         if (m_interlock)
             UnbindFrameRead();
         else if (key.abe && color && TextureBarrier())
@@ -2037,9 +2139,9 @@ void GSGpuRenderer::ApplyKey(const DrawKey &key, Target *color, Target *depth)
     if (!key.abe)
     {
         glDisable(GL_BLEND);
-        glUniform1i(U("uSrcScaleMode"), 0);
-        glUniform1i(U("uBlendC"), 0);
-        glUniform1f(U("uBlendFix"), 128.0f);
+        SetU(glUniform1i, "uSrcScaleMode", 0);
+        SetU(glUniform1i, "uBlendC", 0);
+        SetU(glUniform1f, "uBlendFix", 128.0f);
         return;
     }
     const uint32_t a = key.alpha & 3u, b = (key.alpha >> 2) & 3u, c = (key.alpha >> 4) & 3u, d = (key.alpha >> 6) & 3u;
@@ -2096,9 +2198,9 @@ void GSGpuRenderer::ApplyKey(const DrawKey &key, Target *color, Target *depth)
     glEnable(GL_BLEND);
     glBlendEquationSeparate(equation, GL_FUNC_ADD);
     glBlendFuncSeparate(srcFactor, dstFactor, GL_ONE, GL_ZERO);
-    glUniform1i(U("uSrcScaleMode"), srcMode < 0 ? 0 : srcMode);
-    glUniform1i(U("uBlendC"), static_cast<GLint>(c));
-    glUniform1f(U("uBlendFix"), fix);
+    SetU(glUniform1i, "uSrcScaleMode", srcMode < 0 ? 0 : srcMode);
+    SetU(glUniform1i, "uBlendC", static_cast<GLint>(c));
+    SetU(glUniform1f, "uBlendFix", fix);
 }
 
 void GSGpuRenderer::FlushDraws()
@@ -2157,18 +2259,36 @@ void GSGpuRenderer::FlushDraws()
     }
     glBindVertexArray(m_vao);
     glBindBuffer(GL_ARRAY_BUFFER, m_vbo);
-    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(m_vertices.size() * sizeof(Vertex)), m_vertices.data(), GL_STREAM_DRAW);
-    glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(m_vertices.size()));
+    // A new buffer store per flush, as before. PS2X_GS_VBO_RING=1: m_vbo as a ring (played choppier, 2026-11-11).
+    static const bool s_orphanEach = std::getenv("PS2X_GS_VBO_RING") == nullptr;
+    const GLsizeiptr bytes = static_cast<GLsizeiptr>(m_vertices.size() * sizeof(Vertex));
+    GLint first = 0;
+    if (s_orphanEach)
+        glBufferData(GL_ARRAY_BUFFER, bytes, m_vertices.data(), GL_STREAM_DRAW);
+    else
+    {
+        if (m_vboUsed + bytes > m_vboSize)
+        {
+            // Orphan: draws still reading the old store keep it; appends never touch bytes a queued draw reads.
+            m_vboSize = std::max<GLsizeiptr>(GLsizeiptr(4) << 20, bytes);
+            glBufferData(GL_ARRAY_BUFFER, m_vboSize, nullptr, GL_STREAM_DRAW);
+            m_vboUsed = 0;
+        }
+        glBufferSubData(GL_ARRAY_BUFFER, m_vboUsed, bytes, m_vertices.data());
+        first = static_cast<GLint>(m_vboUsed / static_cast<GLsizeiptr>(sizeof(Vertex)));
+        m_vboUsed += bytes;
+    }
+    glDrawArrays(GL_TRIANGLES, first, static_cast<GLsizei>(m_vertices.size()));
     if (m_key.alphaSplit)
     {
         // Second half of the blend: Cs*f - Cd*(f-1) for the pixels with f > 1. Not exact where Cs*f
         // is above 255 (the shader output saturates before the subtraction), nor where these
         // primitives overlap each other with f on both sides of 1 (the halves run in sequence).
-        glUniform1i(U("uAlphaPass"), 2);
+        SetU(glUniform1i, "uAlphaPass", 2);
         glBlendEquationSeparate(GL_FUNC_SUBTRACT, GL_FUNC_ADD);
         glBlendFuncSeparate(GL_ONE, GL_SRC1_ALPHA, GL_ONE, GL_ZERO);
-        glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(m_vertices.size()));
-        glUniform1i(U("uAlphaPass"), 1);
+        glDrawArrays(GL_TRIANGLES, first, static_cast<GLsizei>(m_vertices.size()));
+        SetU(glUniform1i, "uAlphaPass", 1);
         glBlendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD);
         glBlendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC1_ALPHA, GL_ONE, GL_ZERO);
     }
@@ -2412,7 +2532,51 @@ bool GSGpuRenderer::PresentMerged(const GSPresentationRequest &request)
     CopyToSnapshot(m_prev, *c2.target, c2.ox, c2.oy, c2.width, c2.height, c2.target->fbp, request.vsyncTick);
     const uint32_t firstDy = std::min(c1.dy, c2.dy);
     const bool mmod = (request.pmode & 0x20u) != 0u, slbg = (request.pmode & 0x80u) != 0u;
-    const uint32_t alp = static_cast<uint32_t>((request.pmode >> 8) & 0xFFu);
+    uint32_t alp = static_cast<uint32_t>((request.pmode >> 8) & 0xFFu);
+    // PS2X_GS_FLICKER_FILTER=0: when both circuits read the same picture (the anti-flicker blend of a
+    // line with its neighbour), show circuit 1 opaque instead.
+    static const bool s_flickerFilter = []()
+    {
+        const char *v = std::getenv("PS2X_GS_FLICKER_FILTER");
+        return !(v && v[0] == '0');
+    }();
+    const bool opaque = !s_flickerFilter && mmod && c1.target == c2.target && c1.ox == c2.ox && c1.oy == c2.oy;
+    if (opaque)
+        alp = 255u;
+    // PS2X_TRACE_MERGE=1: a line for each merge setup not seen before, and every 600 presents how many showed the
+    // same buffer as the one before, how many vblanks had no present, and how many were blended (not opaque).
+    static const bool s_traceMerge = []()
+    {
+        const char *v = std::getenv("PS2X_TRACE_MERGE");
+        return v && v[0] == '1';
+    }();
+    if (s_traceMerge)
+    {
+        using Setup = std::array<uint64_t, 6>;
+        static std::vector<Setup> s_seen;
+        static uint64_t s_lastTick = 0, s_lastDispfb = 0;
+        static uint32_t s_presents = 0, s_repeats = 0, s_skipped = 0, s_blended = 0;
+        const Setup now = {request.pmode, request.dispfb1, request.dispfb2, request.display1, request.display2, opaque ? 1u : 0u};
+        if (std::find(s_seen.begin(), s_seen.end(), now) == s_seen.end() && s_seen.size() < 4096u)
+        {
+            s_seen.push_back(now);
+            std::fprintf(stderr, "[merge] tick=%llu new pmode=%llx dispfb1=%llx dispfb2=%llx display1=%llx display2=%llx opaque=%d\n",
+                         static_cast<unsigned long long>(request.vsyncTick), static_cast<unsigned long long>(now[0]),
+                         static_cast<unsigned long long>(now[1]), static_cast<unsigned long long>(now[2]),
+                         static_cast<unsigned long long>(now[3]), static_cast<unsigned long long>(now[4]), opaque ? 1 : 0);
+        }
+        s_repeats += request.dispfb1 == s_lastDispfb ? 1u : 0u;
+        s_skipped += s_lastTick && request.vsyncTick > s_lastTick + 1u ? static_cast<uint32_t>(request.vsyncTick - s_lastTick - 1u) : 0u;
+        s_blended += opaque ? 0u : 1u;
+        s_lastTick = request.vsyncTick;
+        s_lastDispfb = request.dispfb1;
+        if (++s_presents == 600u)
+        {
+            std::fprintf(stderr, "[merge] tick=%llu presents=600 same-buffer=%u vblanks-without-present=%u blended=%u\n",
+                         static_cast<unsigned long long>(request.vsyncTick), s_repeats, s_skipped, s_blended);
+            s_presents = s_repeats = s_skipped = s_blended = 0;
+        }
+    }
     glUseProgram(m_presentProgram);
     glUniform2i(glGetUniformLocation(m_presentProgram, "uMergeOffset"), static_cast<GLint>((c1.dy - firstDy) * m_scale),
                 static_cast<GLint>((c2.dy - firstDy) * m_scale));
@@ -2536,6 +2700,11 @@ namespace
         return v && *v && std::strcmp(v, "0") != 0;
     }
 
+}
+// PS2X_TRACE_VBLANK (EeScheduler.cpp): nanoseconds non-host threads waited on a full GS queue.
+std::atomic<uint64_t> g_traceGsQueueWaitNs{0};
+namespace
+{
     struct HostStats
     {
         std::atomic<uint64_t> backpressureWaits{0}, presentsDropped{0}, presents{0};
@@ -2761,6 +2930,8 @@ void GSGpuBackend::Enqueue(Command &&command)
             static const bool s_traceStalls = envFlag("PS2X_TRACE_STALLS");
             const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - waitStart).count();
             g_host.guestWaitSeconds += ms / 1000.0;
+            extern std::atomic<uint64_t> g_traceGsQueueWaitNs;
+            g_traceGsQueueWaitNs.fetch_add(static_cast<uint64_t>(ms * 1.0e6), std::memory_order_relaxed);
             if (s_traceStalls && ms > 10.0)
                 std::cerr << "[stall] game thread waited " << ms << " ms on a full GS queue" << std::endl;
         }

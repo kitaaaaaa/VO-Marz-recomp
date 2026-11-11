@@ -32,6 +32,10 @@ rem Twice: the first update may replace pacman and the MSYS2 runtime themselves.
 "%BASH%" -lc "pacman -Syu --noconfirm" || goto fail
 "%BASH%" -lc "pacman -S --needed --noconfirm git rsync unzip mingw-w64-clang-x86_64-clang mingw-w64-clang-x86_64-lld mingw-w64-clang-x86_64-cmake mingw-w64-clang-x86_64-ninja mingw-w64-clang-x86_64-pkgconf mingw-w64-clang-x86_64-python mingw-w64-clang-x86_64-ffmpeg" || goto fail
 "%BASH%" -l marz/tools/setup.sh "%ISO%" || goto fail
+rem The movies as mp4 for the native player (it reads <game dir>\movies; one copy per game folder).
+echo Converting the movies...
+"%BASH%" -l marz/tools/convert_movies.sh marz/iso_jp || goto fail
+"%BASH%" -l marz/tools/convert_movies.sh marz/iso_en || goto fail
 rem The game no longer needs the tools: marz\bin has the runner and its DLLs. A later setup.bat downloads them again.
 echo Deleting the build tools (toolchain\)...
 rmdir /s /q "%TC%"

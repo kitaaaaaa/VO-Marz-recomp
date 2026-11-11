@@ -63,6 +63,9 @@ static constexpr int HOST_WINDOW_HEIGHT = DEFAULT_DISPLAY_HEIGHT;
 static int g_pendingWindowWidth = 0;
 static int g_pendingWindowHeight = 0;
 static int g_framesShown = 0;
+// Game code may set this once at startup: drawn over the picture on every present (host thread), given the picture
+// rectangle (x, y, w, h). Marz draws its movies with it.
+std::function<void(float, float, float, float)> g_presentOverlay;
 static bool g_windowSizeFixed = false;
 // Set by SIGINT/SIGTERM so Ctrl+C in the terminal shuts down like closing the window.
 static volatile std::sig_atomic_t g_signalStop = 0;
@@ -2928,6 +2931,8 @@ void PS2Runtime::run()
             gpuBackend->DrawPresentation(dstRect.x, dstRect.y, dstRect.width, dstRect.height);
         else
             DrawTexturePro(frameTex, srcRect, dstRect, Vector2{0.0f, 0.0f}, 0.0f, WHITE);
+        if (g_presentOverlay)
+            g_presentOverlay(dstRect.x, dstRect.y, dstRect.width, dstRect.height);
         if (m_debugUiInitialized && m_debugUiDrawCallback)
         {
             m_debugUiDrawCallback(*this, m_debugUiUserData);

@@ -25,6 +25,11 @@ namespace ps2_stubs
     extern bool g_mpegNoPicturePacing;
 }
 
+namespace marz_movie
+{
+    void install(PS2Runtime &runtime); // marz_movie.cpp
+}
+
 namespace
 {
     constexpr uint32_t kMarzEntry = 0x00100008u;
@@ -953,6 +958,7 @@ namespace
     {
         if (ps2_game_overrides::hasCommandLineOption("--skip-intro"))
             runtime.replaceFunction(0x00512B80u, &skipMovie);
+        marz_movie::install(runtime);
         runtime.replaceFunction(0x00504968u, &sofdec::addDma);
         runtime.replaceFunction(0x00504C68u, &sofdec::noDma);
         runtime.replaceFunction(0x00504B68u, &sofdec::noDma);

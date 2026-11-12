@@ -13,7 +13,8 @@ Marz (SLPM-65303). This repository holds no game material: the game is recompile
 `setup.bat` installs its tools into `toolchain\` inside the repository (MSYS2 with clang, a JDK and Ghidra), so
 nothing is installed system-wide, and deletes that folder again when it has finished. Next it unpacks your disc into `marz\iso_jp` and writes the English game folder
 `marz\iso_en`. Then it analyses the game program with Ghidra and recompiles and builds it (about 20 to 30 minutes,
-longer on slower PCs). It downloads about 1.1 GB and needs about 12 GB while it works; afterwards
+longer on slower PCs), and converts the game's 5 movies to mp4 for the movie player, into `marz\iso_jp\movies` and
+`marz\iso_en\movies` (about 280 MB and 2 minutes per folder). It downloads about 1.1 GB and needs about 12 GB while it works; afterwards
 the game takes about 7 GB. Run `setup.bat` again after updating the repository
 to rebuild (it downloads the tools again).
 

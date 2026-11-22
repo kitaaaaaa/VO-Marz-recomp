@@ -12,8 +12,9 @@ Marz (SLPM-65303). This repository holds no game material: the game is recompile
 
 `setup.bat` installs its tools into `toolchain\` inside the repository (MSYS2 with clang, a JDK and Ghidra), so
 nothing is installed system-wide, and deletes that folder again when it has finished. Next it unpacks your disc into `marz\iso_jp` and writes the English game folder
-`marz\iso_en`. Then it analyses the game program with Ghidra and recompiles and builds it (about 20 to 30 minutes,
-longer on slower PCs), and converts the game's 5 movies to mp4 for the movie player, into `marz\iso_jp\movies` and
+`marz\iso_en`. Then it analyses the game program with Ghidra and recompiles and builds it (about 2.5 hours in a
+test from a fresh clone, 80 minutes of it fetching the build libraries from GitHub while configuring, which depends
+on your connection), and converts the game's 5 movies to mp4 for the movie player, into `marz\iso_jp\movies` and
 `marz\iso_en\movies` (about 280 MB and 2 minutes per folder). It downloads about 1.1 GB and needs about 12 GB while it works; afterwards
 the game takes about 7 GB. Run `setup.bat` again after updating the repository
 to rebuild (it downloads the tools again).
@@ -26,9 +27,12 @@ to rebuild (it downloads the tools again).
   - `--widescreen=0`: 4:3 (`--widescreen=1`: 16:9)
   - `--ot-handling=1`: handling closer to Virtual-On Oratorio Tangram (MSBS 5.66) for the human players' robots
     (`--ot-handling=0`, the default: Marz's own)
+  - `--voot-buttons=1`: the button layout of Virtual-On Oratorio Tangram (`--voot-buttons=0`, the default: Marz's own)
+  - `--flicker-filter=1`, `--dither=1`: the PS2's flicker filter and dithering back on (both off by default)
+  - `--sofdec=1`: play the movies with the game's own movie player from the disc instead of the mp4 files
+  - `--skip-intro`: no opening movie
 
-  For example, `Marz.exe --en --scale=4 --widescreen=0`. The flicker filter and dither can be changed with the
-  environment variables `PS2X_GS_FLICKER_FILTER` and `PS2X_GS_DITHER`.
+  For example, `Marz.exe --en --scale=4 --widescreen=0`.
 - The game's output goes to `marz\logs\run_play.log`; the build logs are in `marz\logs\`.
 
 ## English translation
